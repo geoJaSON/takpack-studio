@@ -56,6 +56,11 @@ function resolveSource(
   return source;
 }
 
+/** One-line per-source attribution baked into KML descriptions (licensing policy). */
+function sourceAttributionLine(s: ImagerySourceDef): string {
+  return `${s.name} — Attribution: ${s.attribution} — License: ${s.license}`;
+}
+
 function attributionText(
   packageName: string,
   sources: ImagerySourceDef[],
@@ -116,209 +121,265 @@ export async function buildPackage(
   const tempFiles: string[] = [];
   const usedSources: ImagerySourceDef[] = [];
   const fileBase = safeFileBase(request.packageName);
+  const zipPath = path.join(outDir, `${jobId}.zip`);
 
-  // ── Imagery ──────────────────────────────────────────────────────────────
-  if (request.imagery) {
-    const spec = request.imagery;
-    const source = resolveSource(catalog, spec.sourceId);
-    // License policy is server-enforced here, not just at the route layer.
-    if (source.streamOnly) {
-      throw new Error(
-        `${source.name} is stream-only; offline packaging is not permitted by its license`,
-      );
-    }
-    if (source.offlineRequiresPlanCheck && !spec.planConfirmed) {
-      throw new Error(
-        `${source.name} requires confirming your plan permits offline use (planConfirmed)`,
-      );
-    }
-    const adapter: ImageryAdapter | undefined = adapters[source.strategy];
-    if (!adapter) {
-      throw new Error(`No adapter registered for strategy '${source.strategy}'`);
-    }
-    usedSources.push(source);
+  try {
+    // ── Imagery ────────────────────────────────────────────────────────────
+    if (request.imagery) {
+      const spec = request.imagery;
+      const source = resolveSource(catalog, spec.sourceId);
+      // License policy is server-enforced here, not just at the route layer.
+      if (source.streamOnly) {
+        throw new Error(
+          `${source.name} is stream-only; offline packaging is not permitted by its license`,
+        );
+      }
+      if (source.offlineRequiresPlanCheck && !spec.planConfirmed) {
+        throw new Error(
+          `${source.name} requires confirming your plan permits offline use (planConfirmed)`,
+        );
+      }
+      const adapter: ImageryAdapter | undefined = adapters[source.strategy];
+      if (!adapter) {
+        throw new Error(`No adapter registered for strategy '${source.strategy}'`);
+      }
+      usedSources.push(source);
 
-    if (spec.mode === "gpkg") {
-      progress({ phase: "fetching imagery", percent: 5 });
-      const pyramid = await adapter.fetchPyramid(
-        source,
-        request.aoi,
-        spec.minZoom,
-        spec.maxZoom,
-        spec.tileFormat,
-        {
-          apiKey: spec.apiKey,
-          signal,
-          onProgress: (done, total) => {
-            onProgress({
-              phase: "fetching imagery",
-              percent: 5 + Math.round((done / Math.max(1, total)) * 40),
-              message: `${done}/${total} tiles`,
-            });
+      if (spec.mode === "gpkg") {
+        progress({ phase: "fetching imagery", percent: 5 });
+        const pyramid = await adapter.fetchPyramid(
+          source,
+          request.aoi,
+          spec.minZoom,
+          spec.maxZoom,
+          spec.tileFormat,
+          {
+            apiKey: spec.apiKey,
+            signal,
+            onProgress: (done, total) => {
+              onProgress({
+                phase: "fetching imagery",
+                percent: 5 + Math.round((done / Math.max(1, total)) * 40),
+                message: `${done}/${total} tiles`,
+              });
+            },
           },
-        },
-      );
-      warnings.push(...pyramid.warnings);
-      const failRatio =
-        pyramid.total > 0 ? pyramid.failed / pyramid.total : 0;
-      if (failRatio > TILE_FAIL_ABORT_RATIO) {
-        throw new Error(
-          `Imagery fetch failed: ${pyramid.failed}/${pyramid.total} tiles failed`,
         );
-      }
-      if (failRatio > TILE_FAIL_WARN_RATIO) {
-        warnings.push(
-          `${pyramid.failed}/${pyramid.total} tiles failed to download; package has gaps`,
-        );
-      }
+        warnings.push(...pyramid.warnings);
+        const failRatio =
+          pyramid.total > 0 ? pyramid.failed / pyramid.total : 0;
+        if (failRatio > TILE_FAIL_ABORT_RATIO) {
+          throw new Error(
+            `Imagery fetch failed: ${pyramid.failed}/${pyramid.total} tiles failed`,
+          );
+        }
+        if (failRatio > TILE_FAIL_WARN_RATIO) {
+          warnings.push(
+            `${pyramid.failed}/${pyramid.total} tiles failed to download; package has gaps`,
+          );
+        }
 
-      progress({ phase: "writing geopackage", percent: 50 });
-      const gpkgTemp = path.join(outDir, `${jobId}-imagery.gpkg`);
-      tempFiles.push(gpkgTemp);
-      writeGeoPackage({
-        filePath: gpkgTemp,
-        tableName: safeTableName(request.packageName),
-        aoi: request.aoi,
-        minZoom: spec.minZoom,
-        maxZoom: spec.maxZoom,
-        tiles: pyramid.tiles,
-        tileFormat: spec.tileFormat,
+        progress({ phase: "writing geopackage", percent: 50 });
+        const gpkgTemp = path.join(outDir, `${jobId}-imagery.gpkg`);
+        tempFiles.push(gpkgTemp);
+        writeGeoPackage({
+          filePath: gpkgTemp,
+          tableName: safeTableName(request.packageName),
+          aoi: request.aoi,
+          minZoom: spec.minZoom,
+          maxZoom: spec.maxZoom,
+          tiles: pyramid.tiles,
+          tileFormat: spec.tileFormat,
+        });
+        const gpkgName = `${fileBase}.gpkg`;
+        const gpkgEntry = `${uuid()}/${gpkgName}`;
+        zipFiles.push({ entry: gpkgEntry, content: { file: gpkgTemp } });
+        // GeoPackage import is by content sniffing — name Parameter only.
+        manifestEntries.push({ zipEntry: gpkgEntry, name: gpkgName });
+      } else {
+        progress({ phase: "fetching imagery", percent: 5 });
+        if (!adapter.fetchSingleImage) {
+          throw new Error(
+            `Source ${source.name} cannot produce a single rectified image for KMZ GRG export`,
+          );
+        }
+        const image = await adapter.fetchSingleImage(
+          source,
+          request.aoi,
+          limits.maxGrgPixels,
+          { apiKey: spec.apiKey, signal },
+        );
+        if (!image) {
+          throw new Error(`Source ${source.name} returned no image for the AOI`);
+        }
+        if (image.warnings?.length) warnings.push(...image.warnings);
+        progress({ phase: "writing grg kmz", percent: 50 });
+        const kmzTemp = path.join(outDir, `${jobId}-grg.kmz`);
+        tempFiles.push(kmzTemp);
+        await buildGrgKmz({
+          filePath: kmzTemp,
+          name: request.packageName,
+          // Attribution travels WITH the imagery — the KMZ may be shared
+          // standalone, detached from attribution.txt.
+          description: sourceAttributionLine(source),
+          image: image.data,
+          bounds: image.bounds,
+        });
+        const kmzName = `${fileBase}.kmz`;
+        const kmzEntry = `${uuid()}/${kmzName}`;
+        zipFiles.push({ entry: kmzEntry, content: { file: kmzTemp } });
+        manifestEntries.push({
+          zipEntry: kmzEntry,
+          name: kmzName,
+          contentType: "KML",
+          visible: true,
+        });
+      }
+    }
+
+    // ── Features: CoT events + KML overlay ─────────────────────────────────
+    progress({ phase: "writing features", percent: 65 });
+    const featureByUid = new Map<string, MapFeature>(
+      request.features.map((f) => [f.id, f]),
+    );
+    const cotFiles = buildCotEvents(request.features, input.determinism);
+    for (const cot of cotFiles) {
+      const entry = `${cot.uid}/${cot.uid}.cot`;
+      zipFiles.push({ entry, content: cot.xml });
+      manifestEntries.push({
+        zipEntry: entry,
+        name: featureByUid.get(cot.uid)?.name ?? cot.uid,
+        uid: cot.uid,
+        isCot: true,
       });
-      const gpkgName = `${fileBase}.gpkg`;
-      const gpkgEntry = `${uuid()}/${gpkgName}`;
-      zipFiles.push({ entry: gpkgEntry, content: { file: gpkgTemp } });
-      // GeoPackage import is by content sniffing — name Parameter only.
-      manifestEntries.push({ zipEntry: gpkgEntry, name: gpkgName });
-    } else {
-      progress({ phase: "fetching imagery", percent: 5 });
-      if (!adapter.fetchSingleImage) {
-        throw new Error(
-          `Source ${source.name} cannot produce a single rectified image for KMZ GRG export`,
+    }
+
+    const sourcesForAttribution: ImagerySourceDef[] = [...usedSources];
+
+    // Kind 'line' features exist ONLY in the KML overlay (no CoT). When the
+    // overlay is opted out but line features exist, still emit an overlay
+    // containing just those lines (with a warning) — otherwise they would be
+    // silently dropped from the package.
+    const kmlFeatures =
+      request.includeKmlOverlay !== false
+        ? request.features
+        : request.features.filter((f) => f.kind === "line");
+    if (kmlFeatures.length > 0) {
+      if (request.includeKmlOverlay === false) {
+        warnings.push(
+          `${kmlFeatures.length} line feature(s) export only via the KML overlay; ` +
+            "included a KML overlay containing only those lines despite includeKmlOverlay=false",
         );
       }
-      const image = await adapter.fetchSingleImage(
-        source,
-        request.aoi,
-        limits.maxGrgPixels,
-        { apiKey: spec.apiKey, signal },
-      );
-      if (!image) {
-        throw new Error(`Source ${source.name} returned no image for the AOI`);
-      }
-      progress({ phase: "writing grg kmz", percent: 50 });
-      const kmzTemp = path.join(outDir, `${jobId}-grg.kmz`);
-      tempFiles.push(kmzTemp);
-      await buildGrgKmz({
-        filePath: kmzTemp,
-        name: request.packageName,
-        image: image.data,
-        bounds: image.bounds,
-      });
-      const kmzName = `${fileBase}.kmz`;
-      const kmzEntry = `${uuid()}/${kmzName}`;
-      zipFiles.push({ entry: kmzEntry, content: { file: kmzTemp } });
+      const kmlDescription =
+        usedSources.length > 0
+          ? usedSources.map(sourceAttributionLine).join("; ")
+          : `Generated by TAKPack Studio on ${nowFn().toISOString()}`;
+      const kml = buildKmlDocument(request.packageName, kmlFeatures, kmlDescription);
+      const entry = `${uuid()}/overlays.kml`;
+      zipFiles.push({ entry, content: kml });
       manifestEntries.push({
-        zipEntry: kmzEntry,
-        name: kmzName,
+        zipEntry: entry,
+        name: "overlays.kml",
         contentType: "KML",
         visible: true,
       });
     }
-  }
 
-  // ── Features: CoT events + KML overlay ───────────────────────────────────
-  progress({ phase: "writing features", percent: 65 });
-  const featureByUid = new Map<string, MapFeature>(
-    request.features.map((f) => [f.id, f]),
-  );
-  const cotFiles = buildCotEvents(request.features, input.determinism);
-  for (const cot of cotFiles) {
-    const entry = `${cot.uid}/${cot.uid}.cot`;
-    zipFiles.push({ entry, content: cot.xml });
-    manifestEntries.push({
-      zipEntry: entry,
-      name: featureByUid.get(cot.uid)?.name ?? cot.uid,
-      uid: cot.uid,
-      isCot: true,
-    });
-  }
-
-  const sourcesForAttribution: ImagerySourceDef[] = [...usedSources];
-
-  if (request.includeKmlOverlay !== false && request.features.length > 0) {
-    const kml = buildKmlDocument(request.packageName, request.features);
-    const entry = `${uuid()}/overlays.kml`;
-    zipFiles.push({ entry, content: kml });
-    manifestEntries.push({
-      zipEntry: entry,
-      name: "overlays.kml",
-      contentType: "KML",
-      visible: true,
-    });
-  }
-
-  // ── Streaming map-source XML ─────────────────────────────────────────────
-  progress({ phase: "writing map sources", percent: 70 });
-  for (const id of request.mapSourceXmlIds) {
-    const source = catalog.find((s) => s.id === id);
-    if (!source) {
-      warnings.push(`Skipped map-source XML for unknown source '${id}'`);
-      continue;
-    }
-    if (!source.tileUrlTemplate) {
-      warnings.push(
-        `Skipped map-source XML for ${source.name}: no tile URL template`,
+    // ── Streaming map-source XML ───────────────────────────────────────────
+    progress({ phase: "writing map sources", percent: 70 });
+    // The request's apiKey belongs to the imagery source's provider. It may
+    // only be embedded into map-source XML for sources that share that
+    // provider's keyId — never spliced into a different provider's URL.
+    const imagerySpec = request.imagery;
+    const imagerySource = imagerySpec
+      ? catalog.find((s) => s.id === imagerySpec.sourceId)
+      : undefined;
+    for (const id of request.mapSourceXmlIds) {
+      const source = catalog.find((s) => s.id === id);
+      if (!source) {
+        warnings.push(`Skipped map-source XML for unknown source '${id}'`);
+        continue;
+      }
+      if (!source.tileUrlTemplate) {
+        warnings.push(
+          `Skipped map-source XML for ${source.name}: no tile URL template`,
+        );
+        continue;
+      }
+      const keyed = source.tileUrlTemplate.includes("{key}");
+      const apiKey =
+        source.keyId !== undefined && imagerySource?.keyId === source.keyId
+          ? imagerySpec?.apiKey
+          : undefined;
+      if (keyed && !(request.includeKeyInXml && apiKey)) {
+        // NEVER emit keyed URLs without explicit opt-in plus a key that
+        // belongs to this source's provider.
+        warnings.push(
+          request.includeKeyInXml && imagerySpec?.apiKey
+            ? `Skipped map-source XML for ${source.name}: the supplied API key belongs to a different provider`
+            : `Skipped map-source XML for ${source.name}: requires an API key and includeKeyInXml opt-in`,
+        );
+        continue;
+      }
+      const xml = buildMapSourceXml(
+        source,
+        keyed ? { apiKey, includeKey: true } : {},
       );
-      continue;
+      const name = `mapsource-${source.id}.xml`;
+      const entry = `${uuid()}/${name}`;
+      zipFiles.push({ entry, content: xml });
+      manifestEntries.push({ zipEntry: entry, name });
+      if (!sourcesForAttribution.some((s) => s.id === source.id)) {
+        sourcesForAttribution.push(source);
+      }
     }
-    const keyed = source.tileUrlTemplate.includes("{key}");
-    const apiKey = request.imagery?.apiKey;
-    if (keyed && !(request.includeKeyInXml && apiKey)) {
-      // NEVER emit keyed URLs without explicit opt-in plus a key to embed.
-      warnings.push(
-        `Skipped map-source XML for ${source.name}: requires an API key and includeKeyInXml opt-in`,
-      );
-      continue;
+
+    // ── Attribution ────────────────────────────────────────────────────────
+    const attributionEntry = `${uuid()}/attribution.txt`;
+    zipFiles.push({
+      entry: attributionEntry,
+      content: attributionText(request.packageName, sourcesForAttribution, nowFn()),
+    });
+    manifestEntries.push({ zipEntry: attributionEntry, name: "attribution.txt" });
+
+    // ── Manifest + zip ─────────────────────────────────────────────────────
+    progress({ phase: "writing manifest", percent: 75 });
+    const manifestXml = buildManifestXml(uuid(), request.packageName, manifestEntries);
+    zipFiles.push({ entry: "MANIFEST/manifest.xml", content: manifestXml });
+
+    progress({ phase: "zipping", percent: 85 });
+    // Manifest zipEntry values must each match exactly one zip entry —
+    // duplicate paths (e.g. duplicate feature ids both producing
+    // <uid>/<uid>.cot) would make ATAK's extractor overwrite one with the
+    // other, silently losing content.
+    const entryPaths = new Set<string>();
+    for (const f of zipFiles) {
+      if (entryPaths.has(f.entry)) {
+        throw new Error(`duplicate zip entry path: ${f.entry}`);
+      }
+      entryPaths.add(f.entry);
     }
-    const xml = buildMapSourceXml(
-      source,
-      keyed ? { apiKey, includeKey: true } : {},
-    );
-    const name = `mapsource-${source.id}.xml`;
-    const entry = `${uuid()}/${name}`;
-    zipFiles.push({ entry, content: xml });
-    manifestEntries.push({ zipEntry: entry, name });
-    if (!sourcesForAttribution.some((s) => s.id === source.id)) {
-      sourcesForAttribution.push(source);
+    await writeZip(zipPath, zipFiles);
+
+    const { size } = await stat(zipPath);
+    progress({ phase: "completed", percent: 100 });
+    return {
+      zipPath,
+      sizeBytes: size,
+      warnings,
+      entries: zipFiles.map((f) => f.entry),
+    };
+  } catch (err) {
+    // A failed/aborted build must not leave a partial artifact behind. On
+    // success the zip IS the artifact, so this runs only on the error path.
+    await rm(zipPath, { force: true }).catch(() => {});
+    throw err;
+  } finally {
+    // Idempotent (rm force) — temps are removed on success and failure alike,
+    // including queue timeouts: the next checkAborted() throw lands here.
+    for (const f of tempFiles) {
+      await rm(f, { force: true }).catch(() => {});
     }
   }
-
-  // ── Attribution ──────────────────────────────────────────────────────────
-  const attributionEntry = `${uuid()}/attribution.txt`;
-  zipFiles.push({
-    entry: attributionEntry,
-    content: attributionText(request.packageName, sourcesForAttribution, nowFn()),
-  });
-  manifestEntries.push({ zipEntry: attributionEntry, name: "attribution.txt" });
-
-  // ── Manifest + zip ───────────────────────────────────────────────────────
-  progress({ phase: "writing manifest", percent: 75 });
-  const manifestXml = buildManifestXml(uuid(), request.packageName, manifestEntries);
-  zipFiles.push({ entry: "MANIFEST/manifest.xml", content: manifestXml });
-
-  progress({ phase: "zipping", percent: 85 });
-  const zipPath = path.join(outDir, `${jobId}.zip`);
-  await writeZip(zipPath, zipFiles);
-  for (const f of tempFiles) {
-    await rm(f, { force: true });
-  }
-
-  const { size } = await stat(zipPath);
-  progress({ phase: "completed", percent: 100 });
-  return {
-    zipPath,
-    sizeBytes: size,
-    warnings,
-    entries: zipFiles.map((f) => f.entry),
-  };
 }

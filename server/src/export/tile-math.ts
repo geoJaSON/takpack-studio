@@ -51,14 +51,23 @@ export interface TileRange {
   count: number;
 }
 
-/** Inclusive XYZ tile range covering an AOI at zoom z. */
+/**
+ * Inclusive XYZ tile range covering an AOI at zoom z. The SE corner uses
+ * half-open semantics: a south/east edge exactly on a tile boundary does NOT
+ * pull in the extra row/column strictly outside the AOI.
+ */
 export function tileRangeForAoi(aoi: Aoi, z: number): TileRange {
+  const n = 2 ** z;
   const nw = lonLatToTile(aoi.west, aoi.north, z);
-  const se = lonLatToTile(aoi.east, aoi.south, z);
-  const minX = Math.min(nw.x, se.x);
-  const maxX = Math.max(nw.x, se.x);
-  const minY = Math.min(nw.y, se.y);
-  const maxY = Math.max(nw.y, se.y);
+  const seF = lonLatToTileFloat(aoi.east, aoi.south, z);
+  const seX = Math.max(0, Math.min(n - 1, Math.ceil(seF.x) - 1));
+  const seY = Math.max(0, Math.min(n - 1, Math.ceil(seF.y) - 1));
+  // min/max pairing also guards the degenerate case where the half-open SE
+  // corner lands before the NW corner (zero-width AOI on a boundary).
+  const minX = Math.min(nw.x, seX);
+  const maxX = Math.max(nw.x, seX);
+  const minY = Math.min(nw.y, seY);
+  const maxY = Math.max(nw.y, seY);
   return {
     minX,
     minY,

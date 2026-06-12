@@ -1,8 +1,20 @@
 /** XML + color helpers shared by every export writer. */
 
-/** Escape a string for use in XML text content or attribute values. */
+/**
+ * Characters that are illegal in XML 1.0 even when escaped: C0 controls
+ * other than tab/LF/CR, plus DEL and the non-characters U+FFFE/U+FFFF.
+ */
+const XML_ILLEGAL_CHARS =
+  /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\uFFFE\uFFFF]/g;
+
+/**
+ * Escape a string for use in XML text content or attribute values.
+ * XML-illegal characters are stripped first — escaping alone would still
+ * leave the emitted document unparseable on the device.
+ */
 export function esc(value: string): string {
   return value
+    .replace(XML_ILLEGAL_CHARS, "")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")

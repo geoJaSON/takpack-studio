@@ -35,23 +35,29 @@ async function fetchResponse(
   url: string,
   opts: FetchOptions,
 ): Promise<Response | null> {
+  // Respect an already-aborted caller signal: adding an 'abort' listener to an
+  // aborted signal never fires, so without this check every fetch started
+  // after a job timeout would run to full completion on a fresh controller.
+  if (opts.signal?.aborted) return null;
   const ctrl = new AbortController();
   const tid = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  const onOuterAbort = () => ctrl.abort();
-  opts.signal?.addEventListener("abort", onOuterAbort, { once: true });
+  // AbortSignal.any handles both pre-aborted caller signals and later aborts
+  // without manual listener add/remove bookkeeping.
+  const signal = opts.signal
+    ? AbortSignal.any([ctrl.signal, opts.signal])
+    : ctrl.signal;
   try {
     const res = await getFetchImpl()(url, {
       method: opts.method ?? "GET",
       headers: { "User-Agent": USER_AGENT, ...opts.headers },
       body: opts.body,
-      signal: ctrl.signal,
+      signal,
     });
     return res.ok ? res : null;
   } catch {
     return null;
   } finally {
     clearTimeout(tid);
-    opts.signal?.removeEventListener("abort", onOuterAbort);
   }
 }
 
@@ -86,11 +92,13 @@ export async function fetchJson<T>(
 /**
  * Run async jobs with bounded parallelism; results preserve job order.
  * Jobs should capture their own failures (e.g. resolve null) — a rejected
- * job rejects the whole batch.
+ * job rejects the whole batch. If `signal` aborts, no further jobs are
+ * launched (in-flight jobs finish); the unlaunched result slots stay empty.
  */
 export async function runBounded<T>(
   jobs: Array<() => Promise<T>>,
   concurrency: number,
+  signal?: AbortSignal,
 ): Promise<T[]> {
   const results = new Array<T>(jobs.length);
   let next = 0;
@@ -98,6 +106,7 @@ export async function runBounded<T>(
     { length: Math.max(1, Math.min(concurrency, jobs.length)) },
     async () => {
       for (;;) {
+        if (signal?.aborted) return; // stop launching new jobs once aborted
         const i = next++;
         if (i >= jobs.length) return;
         results[i] = await jobs[i]();
@@ -106,4 +115,16 @@ export async function runBounded<T>(
   );
   await Promise.all(workers);
   return results;
+}
+
+/** Magic-byte sniff: JPEG = FF D8 FF, PNG = 89 50 4E 47 0D 0A 1A 0A. */
+export function sniffImageFormat(buf: Buffer): "jpeg" | "png" | null {
+  if (buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
+    return "jpeg";
+  }
+  const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  if (buf.length >= png.length && png.every((b, i) => buf[i] === b)) {
+    return "png";
+  }
+  return null;
 }

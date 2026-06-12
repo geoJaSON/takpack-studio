@@ -10,16 +10,25 @@ import { esc } from "./xml.js";
 export interface GrgKmzOptions {
   filePath: string;
   name: string;
+  /**
+   * Attribution/license text baked into doc.kml (licensing policy: attribution
+   * must travel with the imagery, even when the KMZ is shared standalone).
+   */
+  description?: string;
   /** JPEG-encoded rectified image covering `bounds`. */
   image: Buffer;
   bounds: Aoi;
 }
 
-function groundOverlayKml(name: string, b: Aoi): string {
+function groundOverlayKml(name: string, b: Aoi, description?: string): string {
+  const descriptionLine =
+    description !== undefined && description.length > 0
+      ? `\n    <description>${esc(description)}</description>`
+      : "";
   return `<?xml version="1.0" encoding="UTF-8"?>
 <kml xmlns="http://www.opengis.net/kml/2.2">
   <GroundOverlay>
-    <name>${esc(name)}</name>
+    <name>${esc(name)}</name>${descriptionLine}
     <Icon>
       <href>files/overlay.jpg</href>
     </Icon>
@@ -42,7 +51,9 @@ export async function buildGrgKmz(opts: GrgKmzOptions): Promise<void> {
     out.on("error", reject);
     archive.on("error", reject);
     archive.pipe(out);
-    archive.append(groundOverlayKml(opts.name, opts.bounds), { name: "doc.kml" });
+    archive.append(groundOverlayKml(opts.name, opts.bounds, opts.description), {
+      name: "doc.kml",
+    });
     archive.append(opts.image, { name: "files/overlay.jpg" });
     void archive.finalize();
   });

@@ -12,9 +12,14 @@ import { aoiTo3857, tileBounds3857, tileRangeForAoi } from "../export/tile-math.
 import { fetchBinary, runBounded } from "./fetch-util.js";
 
 const TILE_SIZE = 256;
-/** 16×16 tiles = 4096 px per side — ArcGIS ImageServer per-request pixel budget. */
-const BLOCK_TILES = 16;
-const MAX_REQ_PX = BLOCK_TILES * TILE_SIZE;
+/**
+ * 15×15 tiles = 3840 px per side — keeps 256 px tile alignment while staying
+ * within the USGS NAIP ImageServer's maxImageWidth/maxImageHeight of 4000
+ * (4096 px requests return an HTTP-200 JSON error body, not an image).
+ */
+const BLOCK_TILES = 15;
+/** Verified inclusive per-request pixel cap (server maxImageWidth/Height). */
+const MAX_REQ_PX = 4000;
 const BLOCK_CONCURRENCY = 4;
 const EXPORT_TIMEOUT_MS = 90_000;
 const JPEG_QUALITY = 80;
@@ -47,6 +52,31 @@ interface Block {
   yCount: number;
 }
 
+/**
+ * ArcGIS servers return JSON error payloads with HTTP 200 AND a lying
+ * image/jpeg content-type (verified live against imagery.nationalmap.gov),
+ * so detection must sniff the body: a leading '{' is never a JPEG/PNG.
+ * Returns the parsed error message, or null when the buffer is not JSON.
+ */
+export function arcgisErrorMessage(buf: Buffer): string | null {
+  let i = 0;
+  while (
+    i < buf.length &&
+    (buf[i] === 0x20 || buf[i] === 0x09 || buf[i] === 0x0a || buf[i] === 0x0d)
+  ) {
+    i++;
+  }
+  if (i >= buf.length || buf[i] !== 0x7b /* '{' */) return null;
+  try {
+    const parsed = JSON.parse(buf.toString("utf8")) as {
+      error?: { message?: string };
+    };
+    return parsed.error?.message ?? "server returned a JSON error";
+  } catch {
+    return "server returned a non-image response";
+  }
+}
+
 export class ArcgisExportAdapter implements ImageryAdapter {
   async fetchPyramid(
     source: ImagerySourceDef,
@@ -61,8 +91,8 @@ export class ArcgisExportAdapter implements ImageryAdapter {
       throw new Error(`Source '${source.id}' has no exportUrlBase.`);
     }
 
-    // Partition each zoom's tile range into ≤16×16-tile blocks so every
-    // exportImage request stays within the 4096 px budget.
+    // Partition each zoom's tile range into ≤15×15-tile blocks so every
+    // exportImage request stays within the server's 4000 px budget.
     const blocks: Block[] = [];
     let total = 0;
     for (let z = minZoom; z <= maxZoom; z++) {
@@ -82,6 +112,7 @@ export class ArcgisExportAdapter implements ImageryAdapter {
     }
 
     const tiles: PyramidTile[] = [];
+    const serverErrors = new Set<string>();
     let done = 0;
     let failed = 0;
     const step = () => {
@@ -105,8 +136,10 @@ export class ArcgisExportAdapter implements ImageryAdapter {
           timeoutMs: EXPORT_TIMEOUT_MS,
           signal: opts.signal,
         });
-        if (!buf) {
+        const serverError = buf ? arcgisErrorMessage(buf) : null;
+        if (!buf || serverError) {
           // Whole block failed — every tile in it is a failure, never black.
+          if (serverError) serverErrors.add(serverError);
           for (let i = 0; i < b.xCount * b.yCount; i++) {
             failed++;
             step();
@@ -152,9 +185,13 @@ export class ArcgisExportAdapter implements ImageryAdapter {
         }
       }),
       BLOCK_CONCURRENCY,
+      opts.signal,
     );
 
     const warnings: string[] = [];
+    for (const msg of serverErrors) {
+      warnings.push(`ArcGIS exportImage error from '${source.id}': ${msg}`);
+    }
     if (failed > 0) {
       warnings.push(
         `${failed}/${total} tiles failed to download from '${source.id}'.`,
@@ -163,7 +200,7 @@ export class ArcgisExportAdapter implements ImageryAdapter {
     return { tiles, fetched: tiles.length, failed, total, warnings };
   }
 
-  /** One exportImage covering the AOI; long side maxPx (capped at 4096). */
+  /** One exportImage covering the AOI; long side maxPx (capped at 4000). */
   async fetchSingleImage(
     source: ImagerySourceDef,
     aoi: Aoi,
@@ -193,6 +230,10 @@ export class ArcgisExportAdapter implements ImageryAdapter {
       signal: opts.signal,
     });
     if (!buf) return null;
+    const serverError = arcgisErrorMessage(buf);
+    if (serverError) {
+      throw new Error(`ArcGIS exportImage error from '${source.id}': ${serverError}`);
+    }
 
     try {
       const meta = await sharp(buf).metadata();

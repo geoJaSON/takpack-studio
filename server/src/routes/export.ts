@@ -14,7 +14,12 @@ export interface ExportRouteDeps {
 const MAX_LAT = 85.06;
 const MAX_FEATURES = 2000;
 
-const positionSchema = z.tuple([z.number(), z.number()]);
+// [lon, lat] — bounded so out-of-range coordinates (e.g. from an imported
+// GeoJSON file) are rejected at the boundary instead of failing the job later.
+const positionSchema = z.tuple([
+  z.number().min(-180).max(180),
+  z.number().min(-90).max(90),
+]);
 
 const geometrySchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("Point"), coordinates: positionSchema }),
@@ -36,17 +41,47 @@ const styleSchema = z.object({
   fillOpacity: z.number().min(0).max(1).optional(),
 });
 
-const featureSchema = z.object({
-  id: z.uuid(),
-  kind: z.enum(["marker", "line", "route", "polygon", "rectangle", "circle"]),
-  name: z.string(),
-  sidc: z.string().optional(),
-  affiliation: z.enum(["friendly", "hostile", "neutral", "unknown"]).optional(),
-  geometry: geometrySchema,
-  radiusM: z.number().positive().optional(),
-  style: styleSchema,
-  remarks: z.string().optional(),
-});
+/** Geometry type each feature kind requires (mirrors the writer invariants). */
+const KIND_GEOMETRY = {
+  marker: "Point",
+  circle: "Point",
+  line: "LineString",
+  route: "LineString",
+  polygon: "Polygon",
+  rectangle: "Polygon",
+} as const;
+
+const featureSchema = z
+  .object({
+    id: z.uuid(),
+    kind: z.enum(["marker", "line", "route", "polygon", "rectangle", "circle"]),
+    name: z.string(),
+    sidc: z.string().optional(),
+    affiliation: z.enum(["friendly", "hostile", "neutral", "unknown"]).optional(),
+    geometry: geometrySchema,
+    radiusM: z.number().positive().optional(),
+    style: styleSchema,
+    remarks: z.string().optional(),
+  })
+  .superRefine((f, ctx) => {
+    // Cross-field invariants the CoT/KML writers enforce with throws — reject
+    // here with a 400 instead of failing the job after the imagery fetch.
+    const expected = KIND_GEOMETRY[f.kind];
+    if (f.geometry.type !== expected) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["geometry", "type"],
+        message: `kind '${f.kind}' requires ${expected} geometry`,
+      });
+    }
+    if (f.kind === "circle" && f.radiusM === undefined) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["radiusM"],
+        message: "radiusM is required for circle features",
+      });
+    }
+  });
 
 const aoiSchema = z
   .object({
@@ -92,7 +127,24 @@ const imagerySchema = z
 const exportRequestSchema = z.object({
   packageName: z.string().min(1).max(64),
   aoi: aoiSchema,
-  features: z.array(featureSchema).max(MAX_FEATURES),
+  features: z
+    .array(featureSchema)
+    .max(MAX_FEATURES)
+    .superRefine((features, ctx) => {
+      // Feature id becomes the CoT uid AND the zip entry path — duplicates
+      // would silently overwrite one another on import.
+      const seen = new Set<string>();
+      for (const [i, f] of features.entries()) {
+        if (seen.has(f.id)) {
+          ctx.addIssue({
+            code: "custom",
+            path: [i, "id"],
+            message: `duplicate feature id: ${f.id}`,
+          });
+        }
+        seen.add(f.id);
+      }
+    }),
   imagery: imagerySchema.optional(),
   mapSourceXmlIds: z.array(z.string()).default([]),
   includeKeyInXml: z.boolean().optional(),

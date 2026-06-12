@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import sharp from "sharp";
 import { CATALOG, getSource, LIMITS } from "../src/catalog/imagery-sources.js";
-import { runBounded, setFetchImpl } from "../src/adapters/fetch-util.js";
+import { fetchBinary, runBounded, setFetchImpl } from "../src/adapters/fetch-util.js";
 import { buildTileUrl, XyzAdapter } from "../src/adapters/xyz.js";
 import { ArcgisExportAdapter } from "../src/adapters/arcgis-export.js";
 import { ADAPTERS } from "../src/adapters/index.js";
@@ -67,6 +67,19 @@ async function solidPng(
     .png()
     .toBuffer();
 }
+
+async function solidJpeg(
+  width: number,
+  height: number,
+  rgb: { r: number; g: number; b: number },
+): Promise<Buffer> {
+  return sharp({ create: { width, height, channels: 3, background: rgb } })
+    .jpeg()
+    .toBuffer();
+}
+
+const ARC_JSON_ERROR =
+  '{"error":{"code":400,"message":"The requested image exceeds the size limit.","details":[]}}';
 
 function source(id: string): ImagerySourceDef {
   const s = getSource(id);
@@ -203,6 +216,141 @@ describe("XyzAdapter.fetchPyramid", () => {
       adapter.fetchPyramid(source("maptiler-satellite"), oneTileAoi, 10, 10, "jpeg", {}),
     ).rejects.toThrow(/API key/);
   });
+
+  it("counts HTTP-200 non-image bodies as failed in the pass-through path", async () => {
+    const tilePng = await solidPng(256, 256, { r: 10, g: 20, b: 30 });
+    mockFetch((url) => {
+      const m = /\/(\d+)\/(\d+)\/(\d+)\.png$/.exec(url);
+      const x = Number(m?.[2]);
+      // ArcGIS-style 200 JSON error payload for odd columns.
+      return x % 2 === 1
+        ? new Response('{"error":{"code":500,"message":"throttled"}}', { status: 200 })
+        : new Response(tilePng, { status: 200 });
+    });
+
+    // png on a png-default source ⇒ pass-through branch.
+    const result = await adapter.fetchPyramid(
+      source("osm-standard"),
+      aoi,
+      z - 1,
+      z,
+      "png",
+      {},
+    );
+
+    let expectedFailed = 0;
+    for (const key of expectedKeys(aoi, z - 1, z)) {
+      if (Number(key.split("/")[1]) % 2 === 1) expectedFailed++;
+    }
+    expect(expectedFailed).toBeGreaterThan(0);
+    expect(result.failed).toBe(expectedFailed);
+    expect(result.tiles).toHaveLength(result.total - expectedFailed);
+    // no JSON blob ever lands in tile data
+    for (const t of result.tiles) {
+      expect(t.x % 2).toBe(0);
+      expect(t.data.equals(tilePng)).toBe(true);
+    }
+    expect(result.warnings.length).toBeGreaterThan(0);
+  });
+
+  it("re-encodes a PNG body served on a jpeg source so tiles honor the declared format", async () => {
+    const tilePng = await solidPng(256, 256, { r: 40, g: 50, b: 60 });
+    mockFetch(() => new Response(tilePng, { status: 200 }));
+
+    const oneTileAoi = aoiInsideTiles(12, 851, 1552, 851, 1552);
+    // jpeg requested on a jpeg-default source (pass-through candidate), but the
+    // MIXED cache actually serves PNG bytes — must be re-encoded, not passed.
+    const result = await adapter.fetchPyramid(
+      source("usgs-imagery"),
+      oneTileAoi,
+      12,
+      12,
+      "jpeg",
+      {},
+    );
+
+    expect(result.failed).toBe(0);
+    expect(result.tiles).toHaveLength(1);
+    const data = result.tiles[0].data;
+    expect(data[0]).toBe(0xff);
+    expect(data[1]).toBe(0xd8);
+    expect(data[2]).toBe(0xff);
+    expect((await sharp(data).metadata()).format).toBe("jpeg");
+  });
+
+  it("performs no fetches when the signal is already aborted", async () => {
+    const calls = mockFetch(() => new Response("x", { status: 200 }));
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const result = await adapter.fetchPyramid(
+      source("osm-standard"),
+      aoi,
+      z,
+      z,
+      "png",
+      { signal: ctrl.signal },
+    );
+    expect(calls).toHaveLength(0);
+    expect(result.tiles).toHaveLength(0);
+  });
+});
+
+describe("XyzAdapter.fetchSingleImage", () => {
+  const adapter = new XyzAdapter();
+  const z = 12;
+  const aoi = aoiInsideTiles(z, 851, 1552, 852, 1553);
+
+  it("throws when more than 60% of tiles fail", async () => {
+    const tilePng = await solidPng(256, 256, { r: 10, g: 20, b: 30 });
+    let calls = 0;
+    mockFetch(() => {
+      calls++;
+      // Only the first request succeeds; the rest are 200-JSON error bodies.
+      return calls === 1
+        ? new Response(tilePng, { status: 200 })
+        : new Response('{"error":{"code":500,"message":"throttled"}}', { status: 200 });
+    });
+
+    await expect(
+      adapter.fetchSingleImage(source("osm-standard"), aoi, 1000, {}),
+    ).rejects.toThrow(/tiles failed/);
+  });
+
+  it("returns the stitched image with a warning when some tiles fail", async () => {
+    const tilePng = await solidPng(256, 256, { r: 10, g: 20, b: 30 });
+    let calls = 0;
+    mockFetch(() => {
+      calls++;
+      return calls === 1
+        ? new Response("nope", { status: 404 })
+        : new Response(tilePng, { status: 200 });
+    });
+
+    const result = await adapter.fetchSingleImage(
+      source("osm-standard"),
+      aoi,
+      1000,
+      {},
+    );
+    expect(result).not.toBeNull();
+    expect(result!.data.length).toBeGreaterThan(0);
+    expect(result!.warnings).toBeDefined();
+    expect(result!.warnings).toHaveLength(1);
+    expect(result!.warnings![0]).toMatch(/1\/\d+ tiles failed/);
+  });
+
+  it("returns no warnings when every tile succeeds", async () => {
+    const tilePng = await solidPng(256, 256, { r: 10, g: 20, b: 30 });
+    mockFetch(() => new Response(tilePng, { status: 200 }));
+    const result = await adapter.fetchSingleImage(
+      source("osm-standard"),
+      aoi,
+      1000,
+      {},
+    );
+    expect(result).not.toBeNull();
+    expect(result!.warnings).toBeUndefined();
+  });
 });
 
 describe("ArcgisExportAdapter.fetchPyramid", () => {
@@ -305,6 +453,100 @@ describe("ArcgisExportAdapter.fetchPyramid", () => {
     expect(result.tiles).toHaveLength(0);
     expect(result.warnings.length).toBeGreaterThan(0);
   });
+
+  it("keeps every exportImage request within the server's 4000 px cap (15-tile blocks)", async () => {
+    const adapter = new ArcgisExportAdapter();
+    const z = 12;
+    const x0 = 851;
+    const y0 = 1552;
+    const tilesWide = 17; // forces one 15-wide block plus a 2-wide remainder
+    const aoi = aoiInsideTiles(z, x0, y0, x0 + tilesWide - 1, y0);
+
+    const sizes: Array<[number, number]> = [];
+    const jpegBySize = new Map<string, Promise<Buffer>>();
+    mockFetch(async (url) => {
+      const m = /size=(\d+),(\d+)/.exec(url);
+      const w = Number(m![1]);
+      const h = Number(m![2]);
+      sizes.push([w, h]);
+      if (w > 4000 || h > 4000) {
+        // Live-verified NAIP behavior: oversized size= gets HTTP 200 + JSON error.
+        return new Response(ARC_JSON_ERROR, { status: 200 });
+      }
+      const key = `${w}x${h}`;
+      if (!jpegBySize.has(key)) {
+        jpegBySize.set(key, solidJpeg(w, h, { r: 9, g: 9, b: 9 }));
+      }
+      return new Response(await jpegBySize.get(key)!, { status: 200 });
+    });
+
+    const result = await adapter.fetchPyramid(source("naip"), aoi, z, z, "jpeg", {});
+
+    expect(sizes.length).toBeGreaterThan(1);
+    for (const [w, h] of sizes) {
+      expect(w).toBeLessThanOrEqual(4000);
+      expect(h).toBeLessThanOrEqual(4000);
+    }
+    expect(result.total).toBe(tilesWide);
+    expect(result.failed).toBe(0);
+    expect(result.fetched).toBe(tilesWide);
+    expect(result.warnings).toEqual([]);
+  });
+
+  it("counts HTTP-200 JSON error bodies as failed and surfaces the server message", async () => {
+    const adapter = new ArcgisExportAdapter();
+    const z = 12;
+    const aoi = aoiInsideTiles(z, 851, 1552, 852, 1553);
+    mockFetch(() => new Response(ARC_JSON_ERROR, { status: 200 }));
+
+    const result = await adapter.fetchPyramid(source("naip"), aoi, z, z, "jpeg", {});
+    expect(result.total).toBe(4);
+    expect(result.fetched).toBe(0);
+    expect(result.failed).toBe(4);
+    expect(result.tiles).toHaveLength(0);
+    expect(
+      result.warnings.some((w) => w.includes("exceeds the size limit")),
+    ).toBe(true);
+  });
+});
+
+describe("ArcgisExportAdapter.fetchSingleImage", () => {
+  it("clamps the long side to the 4000 px server cap", async () => {
+    const adapter = new ArcgisExportAdapter();
+    const z = 12;
+    const aoi = aoiInsideTiles(z, 851, 1552, 851 + 16, 1552);
+
+    const sizes: Array<[number, number]> = [];
+    mockFetch(async (url) => {
+      const m = /size=(\d+),(\d+)/.exec(url);
+      const w = Number(m![1]);
+      const h = Number(m![2]);
+      sizes.push([w, h]);
+      if (w > 4000 || h > 4000) {
+        return new Response(ARC_JSON_ERROR, { status: 200 });
+      }
+      return new Response(await solidJpeg(w, h, { r: 5, g: 5, b: 5 }), {
+        status: 200,
+      });
+    });
+
+    const result = await adapter.fetchSingleImage(source("naip"), aoi, 8192, {});
+    expect(result).not.toBeNull();
+    expect(sizes).toHaveLength(1);
+    expect(sizes[0][0]).toBe(4000);
+    expect(sizes[0][1]).toBeLessThanOrEqual(4000);
+    expect(result!.width).toBe(4000);
+  });
+
+  it("surfaces an ArcGIS JSON error body as a thrown error", async () => {
+    const adapter = new ArcgisExportAdapter();
+    const aoi = aoiInsideTiles(12, 851, 1552, 852, 1553);
+    mockFetch(() => new Response(ARC_JSON_ERROR, { status: 200 }));
+
+    await expect(
+      adapter.fetchSingleImage(source("naip"), aoi, 1024, {}),
+    ).rejects.toThrow(/exceeds the size limit/);
+  });
 });
 
 describe("catalog", () => {
@@ -388,6 +630,65 @@ describe("catalog", () => {
   });
 });
 
+describe("tileRangeForAoi", () => {
+  // Tile (511, 511) at z10 has east = 0° and south = 0° exactly — both map to
+  // fractional tile coordinate 512.0 with no float error. Anchor the NW corner
+  // strictly inside the tile (mid-tile) so only the SE semantics are probed.
+  const z = 10;
+  const t = tileBoundsLonLat(z, 511, 511);
+  const midLon = (t.west + t.east) / 2;
+  const midLat = (t.south + t.north) / 2;
+
+  it("excludes the extra row/column when south/east lie exactly on tile boundaries", () => {
+    expect(t.east).toBe(0);
+    expect(t.south).toBeCloseTo(0, 12);
+
+    const aoi: Aoi = { west: midLon, north: midLat, east: 0, south: 0 };
+    const r = tileRangeForAoi(aoi, z);
+    expect(r).toEqual({ minX: 511, minY: 511, maxX: 511, maxY: 511, count: 1 });
+    expect(countTiles(aoi, z, z)).toBe(1);
+  });
+
+  it("still includes the SE tile when the edge lies strictly inside it", () => {
+    const r = tileRangeForAoi(
+      {
+        west: midLon,
+        north: midLat,
+        east: 0.01, // nudge into column 512
+        south: -0.01, // nudge into row 512
+      },
+      z,
+    );
+    expect(r).toEqual({ minX: 511, minY: 511, maxX: 512, maxY: 512, count: 4 });
+  });
+});
+
+describe("fetch-util abort handling", () => {
+  it("fetchBinary returns null without fetching when the signal is already aborted", async () => {
+    const calls = mockFetch(() => new Response("x", { status: 200 }));
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const res = await fetchBinary("https://e/t", { signal: ctrl.signal });
+    expect(res).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+
+  it("aborts an in-flight fetch when the caller signal aborts", async () => {
+    setFetchImpl(
+      (_url, init) =>
+        new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new Error("aborted")),
+          );
+        }),
+    );
+    const ctrl = new AbortController();
+    const pending = fetchBinary("https://e/t", { signal: ctrl.signal });
+    ctrl.abort();
+    await expect(pending).resolves.toBeNull();
+  });
+});
+
 describe("runBounded", () => {
   it("preserves order and respects the concurrency bound", async () => {
     let inFlight = 0;
@@ -403,5 +704,30 @@ describe("runBounded", () => {
     expect(results).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(peak).toBeLessThanOrEqual(3);
     expect(peak).toBeGreaterThan(1);
+  });
+
+  it("stops launching new jobs once the signal aborts", async () => {
+    const ctrl = new AbortController();
+    const launched: number[] = [];
+    const jobs = Array.from({ length: 5 }, (_, i) => async () => {
+      launched.push(i);
+      if (i === 0) ctrl.abort();
+      return i;
+    });
+    const results = await runBounded(jobs, 1, ctrl.signal);
+    expect(launched).toEqual([0]);
+    expect(results[0]).toBe(0);
+  });
+
+  it("launches nothing on a pre-aborted signal", async () => {
+    const ctrl = new AbortController();
+    ctrl.abort();
+    const launched: number[] = [];
+    const jobs = Array.from({ length: 3 }, (_, i) => async () => {
+      launched.push(i);
+      return i;
+    });
+    await runBounded(jobs, 2, ctrl.signal);
+    expect(launched).toEqual([]);
   });
 });

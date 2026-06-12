@@ -94,17 +94,26 @@ export async function sliceMasterToTiles(
           continue;
         }
         try {
-          // Destination rect of the covered part within the 256 px tile.
-          const dLeft = Math.max(0, Math.round(((cLeft - fLeft) / (fRight - fLeft)) * TILE_SIZE));
-          const dTop = Math.max(0, Math.round(((cTop - fTop) / (fBottom - fTop)) * TILE_SIZE));
-          const dW = Math.min(
-            TILE_SIZE - dLeft,
-            Math.max(1, Math.round(((cRight - cLeft) / (fRight - fLeft)) * TILE_SIZE)),
-          );
-          const dH = Math.min(
-            TILE_SIZE - dTop,
-            Math.max(1, Math.round(((cBottom - cTop) / (fBottom - fTop)) * TILE_SIZE)),
-          );
+          // Map the exact fractional window [fLeft,fRight]×[fTop,fBottom]
+          // onto the 256 px tile: resize the integer-aligned extract at the
+          // tile's true scale, then crop the fractional sub-window from the
+          // resized piece. Clamping the enlarged extract straight onto the
+          // tile would shift/stretch content by up to 1/scale px whenever the
+          // master crop is downscaled (capped at 2500/4096 px).
+          const scaleX = TILE_SIZE / (fRight - fLeft);
+          const scaleY = TILE_SIZE / (fBottom - fTop);
+          // Destination offset within the tile (>0 only for edge tiles whose
+          // window starts before the master, i.e. fLeft<0 / fTop<0).
+          const dLeft = Math.max(0, Math.round((cLeft - fLeft) * scaleX));
+          const dTop = Math.max(0, Math.round((cTop - fTop) * scaleY));
+          // Resized extract dimensions at the tile's scale.
+          const rw = Math.max(1, Math.round((cRight - cLeft) * scaleX));
+          const rh = Math.max(1, Math.round((cBottom - cTop) * scaleY));
+          // Sub-window of the resized piece that lies inside the tile.
+          const ox = Math.min(rw - 1, Math.max(0, Math.round((fLeft - cLeft) * scaleX)));
+          const oy = Math.min(rh - 1, Math.max(0, Math.round((fTop - cTop) * scaleY)));
+          const dW = Math.max(1, Math.min(TILE_SIZE - dLeft, rw - ox));
+          const dH = Math.max(1, Math.min(TILE_SIZE - dTop, rh - oy));
           const piece = await sharp(raw, {
             raw: { width: info.width, height: info.height, channels: info.channels },
           })
@@ -114,7 +123,8 @@ export async function sliceMasterToTiles(
               width: cRight - cLeft,
               height: cBottom - cTop,
             })
-            .resize(dW, dH, { fit: "fill" })
+            .resize(rw, rh, { fit: "fill" })
+            .extract({ left: ox, top: oy, width: dW, height: dH })
             .png()
             .toBuffer();
           const canvas = sharp({

@@ -60,6 +60,30 @@ describe("buildManifestXml", () => {
     expect(xml).not.toMatch(/value="[^"]*(<|>|&(?!(amp|lt|gt|quot|apos);))[^"]*"/);
   });
 
+  it("strips XML-illegal control characters while preserving tab/LF/CR", () => {
+    const ctl = String.fromCharCode;
+    // Form feed + BEL in the package name, NUL/unit-separator/VT in entries —
+    // all illegal in XML 1.0 even when escaped; they must be stripped so the
+    // manifest stays parseable on the device.
+    const xml = buildManifestXml("u", `Op${ctl(12)}Anvil${ctl(7)}`, [
+      {
+        zipEntry: "u1/a.cot",
+        name: `N${ctl(0)}ame${ctl(31)}`,
+        uid: `u${ctl(11)}1${ctl(127)}`,
+        isCot: true,
+      },
+    ]);
+    expect(xml).toContain('value="OpAnvil"');
+    expect(xml).toContain('value="Name"');
+    expect(xml).toContain('value="u1"');
+    for (const code of [0, 7, 11, 12, 31, 127]) {
+      expect(xml).not.toContain(ctl(code));
+    }
+    // Legal XML whitespace must survive the strip.
+    const tabbed = buildManifestXml("u", `a${ctl(9)}b`, []);
+    expect(tabbed).toContain(`a${ctl(9)}b`);
+  });
+
   it("emits visible=false explicitly when set", () => {
     const xml = buildManifestXml("u", "n", [
       { zipEntry: "u1/o.kml", name: "o.kml", contentType: "KML", visible: false },

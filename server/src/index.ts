@@ -1,4 +1,4 @@
-import { mkdirSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ADAPTERS } from "./adapters/index.js";
@@ -20,6 +20,28 @@ const orphaned = store.reconcileOrphans();
 if (orphaned > 0) {
   console.log(`[jobs] marked ${orphaned} orphaned job(s) failed after restart`);
 }
+
+// Sweep artifacts from jobs that did not complete (crash mid-build leaves
+// temp .gpkg/.kmz and partial zips behind; buildPackage's finally can't run
+// after a hard kill). Completed jobs keep their zip for re-download.
+const keep = new Set(
+  store
+    .list()
+    .filter((j) => j.status === "completed" && j.artifactPath)
+    .map((j) => path.basename(j.artifactPath!)),
+);
+let swept = 0;
+for (const name of readdirSync(artifactsDir)) {
+  if (!keep.has(name)) {
+    try {
+      rmSync(path.join(artifactsDir, name), { force: true });
+      swept++;
+    } catch {
+      /* locked file — next boot gets it */
+    }
+  }
+}
+if (swept > 0) console.log(`[jobs] swept ${swept} stale artifact file(s)`);
 
 const queue = new ExportQueue(store, {
   catalog: CATALOG,

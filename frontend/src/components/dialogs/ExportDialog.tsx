@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { useAppStore, getStoredKey } from "../../store/use-app-store";
+import { useAppStore } from "../../store/use-app-store";
 import { getJob, jobDownloadUrl, startExport } from "../../lib/api";
 import {
   countTilesForAoi,
@@ -100,6 +100,7 @@ export default function ExportDialog() {
   const config = useAppStore((s) => s.config);
   const aoi = useAppStore((s) => s.aoi);
   const features = useAppStore((s) => s.features);
+  const keys = useAppStore((s) => s.keys);
   const setExportOpen = useAppStore((s) => s.setExportOpen);
   const setActiveJob = useAppStore((s) => s.setActiveJob);
 
@@ -191,7 +192,7 @@ export default function ExportDialog() {
 
   // ── derived ──
   const imageryActive = mode !== "none" && aoi !== null && source !== null;
-  const storedKey = source?.keyId ? getStoredKey(source.keyId) : "";
+  const storedKey = source?.keyId ? keys[source.keyId] ?? "" : "";
   const missingKey = imageryActive && !!source?.keyId && !storedKey;
   const needsPlanCheck = imageryActive && !!source?.offlineRequiresPlanCheck;
 

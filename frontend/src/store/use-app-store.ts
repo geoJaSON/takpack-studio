@@ -53,6 +53,11 @@ export interface AppState {
   activeAffiliation: Affiliation;
   setActiveAffiliation: (a: Affiliation) => void;
 
+  // ── API keys (reactive mirror of localStorage takpack_key_*) ──
+  keys: Record<string, string>;
+  /** Persist a key to localStorage AND the store so consumers re-render. */
+  setStoredKey: (keyId: string, value: string) => void;
+
   // ── features ──
   features: MapFeature[];
   addFeature: (f: MapFeature) => void;
@@ -70,6 +75,33 @@ export interface AppState {
 }
 
 const DEFAULT_SIDC = "SFGPU------ ----".replace(/\s/g, "");
+
+// ── API key storage (localStorage, never sent anywhere except per-export) ──
+
+const KEY_PREFIX = "takpack_key_";
+
+function hasLocalStorage(): boolean {
+  return typeof localStorage !== "undefined";
+}
+
+/** Hydrate the reactive key slice from every takpack_key_* entry. */
+function readStoredKeys(): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!hasLocalStorage()) return out;
+  for (let i = 0; i < localStorage.length; i++) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith(KEY_PREFIX)) {
+      out[k.slice(KEY_PREFIX.length)] = localStorage.getItem(k) ?? "";
+    }
+  }
+  return out;
+}
+
+/** Imperative read for non-React callers; components should select s.keys. */
+export function getStoredKey(keyId: string): string {
+  if (!hasLocalStorage()) return "";
+  return localStorage.getItem(`${KEY_PREFIX}${keyId}`) ?? "";
+}
 
 export const useAppStore = create<AppState>((set) => ({
   center: [-111.891, 40.761],
@@ -105,6 +137,20 @@ export const useAppStore = create<AppState>((set) => ({
   activeAffiliation: "friendly",
   setActiveAffiliation: (activeAffiliation) => set({ activeAffiliation }),
 
+  keys: readStoredKeys(),
+  setStoredKey: (keyId, value) => {
+    if (hasLocalStorage()) {
+      if (value) localStorage.setItem(`${KEY_PREFIX}${keyId}`, value);
+      else localStorage.removeItem(`${KEY_PREFIX}${keyId}`);
+    }
+    set((s) => {
+      const keys = { ...s.keys };
+      if (value) keys[keyId] = value;
+      else delete keys[keyId];
+      return { keys };
+    });
+  },
+
   features: [],
   addFeature: (f) => set((s) => ({ features: [...s.features, f] })),
   updateFeature: (id, patch) =>
@@ -126,14 +172,3 @@ export const useAppStore = create<AppState>((set) => ({
   activeJob: null,
   setActiveJob: (activeJob) => set({ activeJob }),
 }));
-
-// ── API key storage (localStorage, never sent anywhere except per-export) ──
-
-export function getStoredKey(keyId: string): string {
-  return localStorage.getItem(`takpack_key_${keyId}`) ?? "";
-}
-
-export function setStoredKey(keyId: string, value: string): void {
-  if (value) localStorage.setItem(`takpack_key_${keyId}`, value);
-  else localStorage.removeItem(`takpack_key_${keyId}`);
-}

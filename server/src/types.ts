@@ -222,6 +222,8 @@ export interface SingleImageResult {
   height: number;
   /** Actual geographic bounds of the returned image (may exceed requested AOI). */
   bounds: Aoi;
+  /** Non-fatal fetch problems (e.g. failed tiles left as black gaps). */
+  warnings?: string[];
 }
 
 export interface ImageryAdapter {

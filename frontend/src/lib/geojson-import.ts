@@ -84,6 +84,11 @@ function asPosition(v: unknown, ctx: string): Position {
     Number.isFinite(v[0]) &&
     Number.isFinite(v[1])
   ) {
+    if (Math.abs(v[0]) > 180 || Math.abs(v[1]) > 90) {
+      throw new Error(
+        `GeoJSON import: coordinate out of WGS84 range in ${ctx} (got [${v[0]}, ${v[1]}]) — is this file in a projected CRS such as EPSG:3857? Re-export as WGS84 (EPSG:4326).`,
+      );
+    }
     return [v[0], v[1]];
   }
   throw new Error(`GeoJSON import: invalid coordinate pair in ${ctx}`);

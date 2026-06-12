@@ -1,20 +1,18 @@
 import { useState } from "react";
-import {
-  useAppStore,
-  getStoredKey,
-  setStoredKey,
-} from "../../store/use-app-store";
+import { useAppStore } from "../../store/use-app-store";
 import { BASEMAPS } from "../../types";
 import type { ImagerySourceDef } from "../../types";
 
 /**
  * Left sidebar: basemap picker, imagery preview source list (with per-source
- * API key entry stored in localStorage), and the attribution footer.
+ * API key entry stored in localStorage + store), and the attribution footer.
  */
 
 function KeyInputRow({ source }: { source: ImagerySourceDef }) {
   const keyId = source.keyId as string;
-  const [value, setValue] = useState(() => getStoredKey(keyId));
+  // Bind straight to the store slice so every key consumer stays in sync.
+  const value = useAppStore((s) => s.keys[keyId] ?? "");
+  const setStoredKey = useAppStore((s) => s.setStoredKey);
 
   return (
     <div className="key-input-row">
@@ -25,10 +23,7 @@ function KeyInputRow({ source }: { source: ImagerySourceDef }) {
         autoComplete="off"
         placeholder={source.keyPlaceholder ?? "paste key"}
         value={value}
-        onChange={(e) => {
-          setValue(e.target.value);
-          setStoredKey(keyId, e.target.value);
-        }}
+        onChange={(e) => setStoredKey(keyId, e.target.value)}
       />
       <span className="label" style={{ opacity: 0.6 }}>
         saved locally — sent only with exports you start

@@ -167,7 +167,7 @@ export default function AnnotationToolbar() {
             type="button"
             className="btn btn-primary"
             onClick={finishDraft}
-            disabled={draftPoints.length < 2}
+            disabled={draftPoints.length < (tool === "polygon" ? 3 : 2)}
             title="Finish drawing"
           >
             Finish

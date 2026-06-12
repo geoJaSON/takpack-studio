@@ -139,6 +139,23 @@ describe("buildKmlDocument", () => {
     expect(xml).not.toContain('<name>A & B <"test"></name>');
   });
 
+  it("emits an escaped Document <description> when provided", () => {
+    const xml = buildKmlDocument(
+      "doc",
+      [],
+      'USGS NAIP — Attribution: A & B <"x"> — License: Public domain',
+    );
+    expect(xml).toContain(
+      "<description>USGS NAIP — Attribution: A &amp; B &lt;&quot;x&quot;&gt; — License: Public domain</description>",
+    );
+    // Placed directly after the Document name.
+    expect(xml).toMatch(/<name>doc<\/name>\n\s*<description>/);
+  });
+
+  it("omits the Document <description> when not provided", () => {
+    expect(buildKmlDocument("doc", [])).not.toContain("<description>");
+  });
+
   it("tessellates circles to a closed 65-point ring", () => {
     const ring = circleRing([10, 45], 1000);
     expect(ring).toHaveLength(65);

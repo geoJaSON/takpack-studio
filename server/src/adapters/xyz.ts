@@ -9,11 +9,13 @@ import type {
   SingleImageResult,
 } from "../types.js";
 import { lonLatToTileFloat, tileRangeForAoi } from "../export/tile-math.js";
-import { fetchBinary, runBounded } from "./fetch-util.js";
+import { fetchBinary, runBounded, sniffImageFormat } from "./fetch-util.js";
 
 const TILE_SIZE = 256;
 const CONCURRENCY = 12;
 const JPEG_QUALITY = 80;
+/** DESIGN.md: >60% tile failure ⇒ job failure (mirrors package-builder). */
+const TILE_FAIL_ABORT_RATIO = 0.6;
 
 /**
  * Substitute {z}/{x}/{y} and optional {key} placeholders. ArcGIS tile
@@ -85,14 +87,24 @@ export class XyzAdapter implements ImageryAdapter {
       coords.map((c) => async () => {
         const url = buildTileUrl(template, c.z, c.x, c.y, opts.apiKey);
         let data = await fetchBinary(url, { signal: opts.signal });
-        if (data && !passThrough) {
-          try {
-            data =
-              format === "jpeg"
-                ? await sharp(data).jpeg({ quality: JPEG_QUALITY }).toBuffer()
-                : await sharp(data).png().toBuffer();
-          } catch {
-            data = null; // corrupt tile — count as failed, never fabricate
+        if (data) {
+          const sniffed = sniffImageFormat(data);
+          if (!sniffed) {
+            // HTTP 200 with a non-image body (JSON error page, HTML
+            // interstitial) — count as failed, never package raw bytes.
+            data = null;
+          } else if (!passThrough || sniffed !== format) {
+            // Requested format differs from the source default, or a MIXED
+            // cache served the other image format — re-encode to honor the
+            // declared tileFormat contract.
+            try {
+              data =
+                format === "jpeg"
+                  ? await sharp(data).jpeg({ quality: JPEG_QUALITY }).toBuffer()
+                  : await sharp(data).png().toBuffer();
+            } catch {
+              data = null; // corrupt tile — count as failed, never fabricate
+            }
           }
         }
         if (data) {
@@ -104,6 +116,7 @@ export class XyzAdapter implements ImageryAdapter {
         opts.onProgress?.(done, total);
       }),
       CONCURRENCY,
+      opts.signal,
     );
 
     const warnings: string[] = [];
@@ -118,8 +131,8 @@ export class XyzAdapter implements ImageryAdapter {
   /**
    * Stitch one zoom level (chosen so the long side fits maxPx) into a single
    * image cropped to the exact AOI pixel bounds. Failed tiles leave black
-   * gaps in the stitched preview (counted in logs by the pyramid path; for a
-   * single preview/GRG image there is no per-tile output to omit).
+   * gaps in the stitched image: per DESIGN.md they are counted — >60% failure
+   * throws, any failure surfaces in the result's `warnings`.
    */
   async fetchSingleImage(
     source: ImagerySourceDef,
@@ -153,11 +166,27 @@ export class XyzAdapter implements ImageryAdapter {
         }),
       })),
       CONCURRENCY,
+      opts.signal,
     );
+    // A 200-with-non-image body (JSON/HTML error page) counts as failed too —
+    // compositing it would reject the whole stitch instead of leaving a gap.
     const ok = fetched.filter(
-      (r): r is { c: TileCoord; buf: Buffer } => r.buf !== null,
+      (r): r is { c: TileCoord; buf: Buffer } =>
+        r?.buf != null && sniffImageFormat(r.buf) !== null,
     );
+    const failed = coords.length - ok.length;
+    if (failed / coords.length > TILE_FAIL_ABORT_RATIO) {
+      throw new Error(
+        `Imagery fetch failed: ${failed}/${coords.length} tiles failed from '${source.id}'`,
+      );
+    }
     if (ok.length === 0) return null;
+    const warnings =
+      failed > 0
+        ? [
+            `${failed}/${coords.length} tiles failed to download from '${source.id}'; stitched image has black gaps.`,
+          ]
+        : [];
 
     const { data: raw, info } = await sharp({
       create: {
@@ -196,7 +225,9 @@ export class XyzAdapter implements ImageryAdapter {
       .jpeg({ quality: 85 })
       .toBuffer();
 
-    return { data, width, height, bounds: { ...aoi } };
+    const result: SingleImageResult = { data, width, height, bounds: { ...aoi } };
+    if (warnings.length > 0) result.warnings = warnings;
+    return result;
   }
 }
 

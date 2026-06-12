@@ -139,15 +139,24 @@ function placemarkLines(f: MapFeature): string[] {
 
 /**
  * Styled KML overlay of ALL features (markers included). No NetworkLink, no
- * Region/LOD — ATAK ignores them. All user strings escaped.
+ * Region/LOD — ATAK ignores them. All user strings escaped. `description`
+ * (attribution/license text per the licensing policy) is emitted as the
+ * Document description when provided.
  */
-export function buildKmlDocument(name: string, features: MapFeature[]): string {
+export function buildKmlDocument(
+  name: string,
+  features: MapFeature[],
+  description?: string,
+): string {
   const lines = [
     '<?xml version="1.0" encoding="UTF-8"?>',
     '<kml xmlns="http://www.opengis.net/kml/2.2">',
     "  <Document>",
     `    <name>${esc(name)}</name>`,
   ];
+  if (description !== undefined && description.length > 0) {
+    lines.push(`    <description>${esc(description)}</description>`);
+  }
   for (const f of features) lines.push(...placemarkLines(f));
   lines.push("  </Document>", "</kml>", "");
   return lines.join("\n");

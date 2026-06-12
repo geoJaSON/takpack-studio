@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { latLng, latLngBounds } from "leaflet";
 import {
   CircleMarker,
   MapContainer,
@@ -10,7 +11,8 @@ import {
   ZoomControl,
   useMapEvents,
 } from "react-leaflet";
-import { getStoredKey, useAppStore } from "../../store/use-app-store";
+import { useAppStore } from "../../store/use-app-store";
+import { aoiFromCorners } from "../../lib/estimate";
 import { BASEMAPS } from "../../types";
 import type {
   Affiliation,
@@ -159,13 +161,14 @@ function isFormTarget(ev: KeyboardEvent): boolean {
  */
 function MapController() {
   const tool = useAppStore((s) => s.tool);
-  const aoiCornerRef = useRef<Position | null>(null);
   const lastMouseRef = useRef(0);
 
   const map = useMapEvents({
     click(e) {
       const s = useAppStore.getState();
-      const p: Position = [e.latlng.lng, e.latlng.lat];
+      // Wrap so panning onto a world copy never yields lon outside ±180.
+      const ll = e.latlng.wrap();
+      const p: Position = [ll.lng, ll.lat];
 
       switch (s.tool) {
         case "select":
@@ -182,18 +185,16 @@ function MapController() {
           break;
 
         case "aoi":
-          if (!aoiCornerRef.current) {
-            aoiCornerRef.current = p;
+          if (s.draftPoints.length === 0) {
             s.pushDraftPoint(p);
           } else {
-            const a = aoiCornerRef.current;
-            aoiCornerRef.current = null;
-            s.setAoi({
-              north: Math.max(a[1], p[1]),
-              south: Math.min(a[1], p[1]),
-              east: Math.max(a[0], p[0]),
-              west: Math.min(a[0], p[0]),
-            });
+            const a = s.draftPoints[0];
+            const box = aoiFromCorners(a, p);
+            if (!box) {
+              alert("AOI cannot cross the antimeridian");
+              return;
+            }
+            s.setAoi(box);
             s.setTool("select"); // also clears the draft corner
           }
           break;
@@ -209,10 +210,12 @@ function MapController() {
             s.pushDraftPoint(p);
           } else {
             const a = s.draftPoints[0];
-            const west = Math.min(a[0], p[0]);
-            const east = Math.max(a[0], p[0]);
-            const south = Math.min(a[1], p[1]);
-            const north = Math.max(a[1], p[1]);
+            const box = aoiFromCorners(a, p);
+            if (!box) {
+              alert("Rectangle cannot cross the antimeridian");
+              return;
+            }
+            const { north, south, east, west } = box;
             // CCW exterior ring SW → SE → NE → NW, closed per GeoJSON
             s.addFeature(
               buildFeature(
@@ -265,7 +268,8 @@ function MapController() {
       const now = Date.now();
       if (now - lastMouseRef.current < 100) return; // ~10 updates/s
       lastMouseRef.current = now;
-      useAppStore.getState().setMousePos({ lat: e.latlng.lat, lon: e.latlng.lng });
+      const ll = e.latlng.wrap();
+      useAppStore.getState().setMousePos({ lat: ll.lat, lon: ll.lng });
     },
 
     mouseout() {
@@ -279,10 +283,9 @@ function MapController() {
     },
   });
 
-  // Tool changes reset the AOI anchor and toggle double-click zoom so
-  // dblclick can finish drafts instead of zooming.
+  // Tool changes toggle double-click zoom so dblclick can finish drafts
+  // instead of zooming.
   useEffect(() => {
-    aoiCornerRef.current = null;
     if (tool === "select") map.doubleClickZoom.enable();
     else map.doubleClickZoom.disable();
     return () => {
@@ -295,7 +298,6 @@ function MapController() {
       const s = useAppStore.getState();
       if (ev.key === "Escape") {
         if (s.tool !== "select") {
-          aoiCornerRef.current = null;
           s.clearDraft();
           s.setTool("select");
         }
@@ -304,7 +306,6 @@ function MapController() {
       } else if (ev.key === "Backspace") {
         if (s.draftPoints.length > 0 && !isFormTarget(ev)) {
           ev.preventDefault();
-          if (s.tool === "aoi") aoiCornerRef.current = null;
           s.popDraftPoint();
         }
       }
@@ -312,6 +313,43 @@ function MapController() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, []);
+
+  // CustomEvent wiring: the toolbar's Finish button and the feature panel's
+  // "zoom to" button delegate here so map logic lives in one place.
+  useEffect(() => {
+    const onFinish = () => finishActiveDraft();
+
+    const onZoomTo = (ev: Event) => {
+      const id = (ev as CustomEvent<{ id: string }>).detail?.id;
+      if (!id) return;
+      const s = useAppStore.getState();
+      const feature = s.features.find((f) => f.id === id);
+      if (!feature) return;
+      s.setSelectedFeatureId(id);
+      const g = feature.geometry;
+      const fit = { padding: [40, 40] as [number, number], maxZoom: 17 };
+      if (g.type === "Point") {
+        const center = latLng(toLatLng(g.coordinates));
+        if (feature.kind === "circle" && typeof feature.radiusM === "number") {
+          map.fitBounds(center.toBounds(feature.radiusM * 2), fit);
+        } else {
+          map.setView(center, Math.max(map.getZoom(), 15));
+        }
+      } else if (g.type === "LineString") {
+        map.fitBounds(latLngBounds(g.coordinates.map(toLatLng)), fit);
+      } else {
+        // Polygon — fit the exterior ring
+        map.fitBounds(latLngBounds(g.coordinates[0].map(toLatLng)), fit);
+      }
+    };
+
+    window.addEventListener("takpack:finish-draft", onFinish);
+    window.addEventListener("takpack:zoom-to", onZoomTo);
+    return () => {
+      window.removeEventListener("takpack:finish-draft", onFinish);
+      window.removeEventListener("takpack:zoom-to", onZoomTo);
+    };
+  }, [map]);
 
   return null;
 }
@@ -326,6 +364,7 @@ export default function MapCanvas() {
   const previewSourceId = useAppStore((s) => s.previewSourceId);
   const previewOpacity = useAppStore((s) => s.previewOpacity);
   const config = useAppStore((s) => s.config);
+  const keys = useAppStore((s) => s.keys);
 
   // MapContainer center/zoom are initial-only; snapshot once so the moveend
   // store sync never feeds back into the map.
@@ -342,7 +381,7 @@ export default function MapCanvas() {
     if (!source || source.strategy !== "xyz" || !source.tileUrlTemplate) {
       return null;
     }
-    const key = source.keyId ? getStoredKey(source.keyId) : "";
+    const key = source.keyId ? keys[source.keyId] ?? "" : "";
     if (source.tileUrlTemplate.includes("{key}") && !key) return null;
     return {
       url: source.tileUrlTemplate.replace("{key}", key),
@@ -350,7 +389,7 @@ export default function MapCanvas() {
       attribution: source.attribution,
       layerKey: `${source.id}:${key}`,
     };
-  }, [previewSourceId, config]);
+  }, [previewSourceId, config, keys]);
 
   const draftLatLngs = draftPoints.map(toLatLng);
 
