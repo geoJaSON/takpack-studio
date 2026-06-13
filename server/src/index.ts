@@ -21,9 +21,27 @@ if (orphaned > 0) {
   console.log(`[jobs] marked ${orphaned} orphaned job(s) failed after restart`);
 }
 
+// Retention: keep only the most recent completed jobs; prune older rows and
+// their zips so artifactsDir + jobs.sqlite don't grow without bound.
+const MAX_COMPLETED_JOBS = 100;
+const completed = store.list().filter((j) => j.status === "completed");
+let pruned = 0;
+for (const j of completed.slice(MAX_COMPLETED_JOBS)) {
+  if (j.artifactPath) {
+    try {
+      rmSync(j.artifactPath, { force: true });
+    } catch {
+      /* locked — the sweep below or the next boot removes it */
+    }
+  }
+  store.delete(j.id);
+  pruned++;
+}
+if (pruned > 0) console.log(`[jobs] pruned ${pruned} old completed job(s)`);
+
 // Sweep artifacts from jobs that did not complete (crash mid-build leaves
 // temp .gpkg/.kmz and partial zips behind; buildPackage's finally can't run
-// after a hard kill). Completed jobs keep their zip for re-download.
+// after a hard kill). Remaining completed jobs keep their zip for re-download.
 const keep = new Set(
   store
     .list()
@@ -59,7 +77,26 @@ const app = createApp({
 });
 
 const port = Number(process.env.PORT) || 8745;
-app.listen(port, () => {
+const server = app.listen(port, () => {
   console.log(`TAKPack Studio server listening on http://localhost:${port}`);
   console.log(`[data] ${dataDir}`);
 });
+
+// Close the SQLite handle on shutdown so WAL is checkpointed cleanly.
+let shuttingDown = false;
+const shutdown = (sig: string): void => {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`[server] ${sig} received — shutting down`);
+  server.close(() => {
+    store.close();
+    process.exit(0);
+  });
+  // Don't hang forever on lingering connections.
+  setTimeout(() => {
+    store.close();
+    process.exit(0);
+  }, 3000).unref();
+};
+process.once("SIGINT", () => shutdown("SIGINT"));
+process.once("SIGTERM", () => shutdown("SIGTERM"));

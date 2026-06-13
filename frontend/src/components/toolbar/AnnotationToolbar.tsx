@@ -98,6 +98,17 @@ export default function AnnotationToolbar() {
   const awaitingSecondClick =
     TWO_CLICK_TOOLS.includes(tool) && draftPoints.length === 1;
 
+  // Mirror MapController's dedupeConsecutive so the Finish button's enabled
+  // state matches what finishActiveDraft will actually accept (a stray
+  // double-click can leave a duplicate trailing vertex).
+  const finishableCount = draftPoints.filter(
+    (p, i) =>
+      i === 0 ||
+      p[0] !== draftPoints[i - 1][0] ||
+      p[1] !== draftPoints[i - 1][1],
+  ).length;
+  const minToFinish = tool === "polygon" ? 3 : 2;
+
   const finishDraft = () => {
     // MapCanvas listens and runs the same completion path as Enter/double-click.
     window.dispatchEvent(new CustomEvent("takpack:finish-draft"));
@@ -167,7 +178,7 @@ export default function AnnotationToolbar() {
             type="button"
             className="btn btn-primary"
             onClick={finishDraft}
-            disabled={draftPoints.length < (tool === "polygon" ? 3 : 2)}
+            disabled={finishableCount < minToFinish}
             title="Finish drawing"
           >
             Finish

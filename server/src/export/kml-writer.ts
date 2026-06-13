@@ -1,5 +1,8 @@
 import type { MapFeature, Position } from "../types.js";
-import { esc, kmlColor } from "./xml.js";
+import { esc, fmtCoord, kmlColor } from "./xml.js";
+
+/** Area-fill alpha when a fill color is set but opacity was left undefined. */
+const DEFAULT_FILL_OPACITY = 0.25;
 
 /** Meters per degree of latitude (spherical approximation, per port source). */
 const METERS_PER_DEG_LAT = 111320;
@@ -29,7 +32,7 @@ export function circleRing(
 }
 
 function coordString(coords: Position[]): string {
-  return coords.map(([lon, lat]) => `${String(lon)},${String(lat)},0`).join(" ");
+  return coords.map(([lon, lat]) => `${fmtCoord(lon)},${fmtCoord(lat)},0`).join(" ");
 }
 
 /** KML LinearRings must be closed — append the first vertex if needed. */
@@ -70,8 +73,13 @@ function lineStyle(f: MapFeature): string {
 }
 
 function polyStyle(f: MapFeature): string {
-  // No fill specified ⇒ fully transparent fill of the stroke color.
-  const c = kmlColor(f.style.fill ?? f.style.stroke, f.style.fillOpacity ?? 0);
+  // A chosen fill color with no explicit opacity defaults to visible; only a
+  // feature with no fill color at all is fully transparent.
+  const fillOpacity =
+    f.style.fill !== undefined
+      ? f.style.fillOpacity ?? DEFAULT_FILL_OPACITY
+      : f.style.fillOpacity ?? 0;
+  const c = kmlColor(f.style.fill ?? f.style.stroke, fillOpacity);
   return `        <PolyStyle><color>${c}</color></PolyStyle>`;
 }
 

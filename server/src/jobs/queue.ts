@@ -1,5 +1,6 @@
 import PQueue from "p-queue";
 import type {
+  BuildPackageOutput,
   ExportRequest,
   FetchStrategy,
   ImageryAdapter,
@@ -68,6 +69,7 @@ export class ExportQueue {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), JOB_TIMEOUT_MS);
+    let buildPromise: Promise<BuildPackageOutput> | undefined;
     try {
       if (request.imagery) {
         const source = this.deps.catalog.find(
@@ -90,21 +92,24 @@ export class ExportQueue {
         );
       });
 
-      const result = await Promise.race([
-        buildPackage({
-          request,
-          jobId,
-          outDir: this.deps.outDir,
-          catalog: this.deps.catalog,
-          adapters: this.deps.adapters,
-          limits: this.deps.limits,
-          onProgress: (p) => {
-            this.store.update(jobId, { progress: p });
-          },
-          signal: controller.signal,
-        }),
-        timedOut,
-      ]);
+      buildPromise = buildPackage({
+        request,
+        jobId,
+        outDir: this.deps.outDir,
+        catalog: this.deps.catalog,
+        adapters: this.deps.adapters,
+        limits: this.deps.limits,
+        onProgress: (p) => {
+          this.store.update(jobId, { progress: p });
+        },
+        signal: controller.signal,
+      });
+      // Swallow a late rejection if the build loses the race to the timeout —
+      // we await it explicitly in catch, so this only prevents an unhandled
+      // rejection warning.
+      buildPromise.catch(() => {});
+
+      const result = await Promise.race([buildPromise, timedOut]);
 
       this.store.update(jobId, {
         status: "completed",
@@ -115,9 +120,16 @@ export class ExportQueue {
         warnings: result.warnings,
       });
     } catch (err) {
+      // Abort and WAIT for the build to actually unwind before we return, or
+      // p-queue (concurrency 1) would start the next job while a timed-out
+      // build is still fetching/encoding — and its onProgress writes would
+      // keep mutating this now-failed job's record.
+      controller.abort();
+      if (buildPromise) await buildPromise.catch(() => {});
       const message = err instanceof Error ? err.message : String(err);
       this.store.update(jobId, {
         status: "failed",
+        progress: { phase: "failed", percent: 0 },
         error: redactSecret(message, apiKey),
       });
     } finally {

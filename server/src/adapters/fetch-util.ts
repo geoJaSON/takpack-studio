@@ -41,23 +41,25 @@ async function fetchResponse(
   if (opts.signal?.aborted) return null;
   const ctrl = new AbortController();
   const tid = setTimeout(() => ctrl.abort(), opts.timeoutMs ?? DEFAULT_TIMEOUT_MS);
-  // AbortSignal.any handles both pre-aborted caller signals and later aborts
-  // without manual listener add/remove bookkeeping.
-  const signal = opts.signal
-    ? AbortSignal.any([ctrl.signal, opts.signal])
-    : ctrl.signal;
+  // Forward the caller's abort to our controller via a listener we remove in
+  // finally. NOT AbortSignal.any: it retains the composite signal on the
+  // long-lived job signal until that aborts, so one composite per tile fetch
+  // would accumulate across a whole pyramid job (a per-job memory leak).
+  const onAbort = () => ctrl.abort();
+  opts.signal?.addEventListener("abort", onAbort, { once: true });
   try {
     const res = await getFetchImpl()(url, {
       method: opts.method ?? "GET",
       headers: { "User-Agent": USER_AGENT, ...opts.headers },
       body: opts.body,
-      signal,
+      signal: ctrl.signal,
     });
     return res.ok ? res : null;
   } catch {
     return null;
   } finally {
     clearTimeout(tid);
+    opts.signal?.removeEventListener("abort", onAbort);
   }
 }
 

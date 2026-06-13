@@ -400,7 +400,9 @@ export default function MapCanvas() {
         zoom={initialView.zoom}
         zoomControl={false}
       >
-        <ZoomControl position="bottomright" />
+        {/* top-left keeps the zoom control clear of the bottom-center
+            drawing toolbar (which widens with draft sub-controls). */}
+        <ZoomControl position="topleft" />
         <TileLayer
           key={basemap.id}
           url={basemap.url}

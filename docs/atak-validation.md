@@ -34,3 +34,10 @@ importfiles/sort/*). What is verified **locally** by the test suite:
   ATAK versions may want `__routeinfo`/navcues for full editability.
 - Package-level `onReceiveImport` only affects network-received packages; local
   imports always go through content sniffing.
+- KMZ-GRG mode writes a degrees-linear `<LatLonBox>` over a Web-Mercator-linear
+  image, so a tall AOI is vertically offset (negligible for small AOIs; a tall
+  box at mid/high latitude can be off by hundreds of metres). The builder warns
+  past ~0.5° of latitude span and steers large areas to GeoPackage mode, which
+  carries its own CRS and has no such offset. If small-AOI GRGs still land
+  offset on device, reproject the image to EPSG:4326 in the single-image
+  adapters before `buildGrgKmz`.

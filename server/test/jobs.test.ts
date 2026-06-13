@@ -196,6 +196,8 @@ describe("ExportQueue", () => {
     expect(failed.error).toContain("unknown imagery source");
     expect(failed.error).toContain("[redacted]");
     expect(failed.error).not.toContain(secret);
-    expect(failed.updatedAt > failed.createdAt).toBe(true);
+    // >= not >: on Windows the create + fail can land in the same millisecond,
+    // so equal timestamps are valid (updatedAt is never earlier than createdAt).
+    expect(failed.updatedAt >= failed.createdAt).toBe(true);
   });
 });

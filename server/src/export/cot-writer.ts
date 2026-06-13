@@ -5,7 +5,10 @@ import type {
   Position,
   WriterDeterminism,
 } from "../types.js";
-import { argbColor, esc } from "./xml.js";
+import { argbColor, esc, fmtCoord } from "./xml.js";
+
+/** Area-fill alpha when a fill color is set but opacity was left undefined. */
+const DEFAULT_FILL_OPACITY = 0.25;
 
 /**
  * Map a MIL-STD-2525C 15-char SIDC to a CoT atom type:
@@ -90,8 +93,13 @@ function unclosedRing(ring: Position[]): Position[] {
 
 function shapeStyleLines(f: MapFeature): string[] {
   const stroke = argbColor(f.style.stroke, f.style.strokeOpacity);
-  // No fill specified ⇒ fully transparent fill of the stroke color.
-  const fill = argbColor(f.style.fill ?? f.style.stroke, f.style.fillOpacity ?? 0);
+  // A chosen fill color with no explicit opacity defaults to visible; only a
+  // feature with no fill color at all is fully transparent.
+  const fillOpacity =
+    f.style.fill !== undefined
+      ? f.style.fillOpacity ?? DEFAULT_FILL_OPACITY
+      : f.style.fillOpacity ?? 0;
+  const fill = argbColor(f.style.fill ?? f.style.stroke, fillOpacity);
   return [
     `    <strokeColor value="${stroke}"/>`,
     `    <strokeWeight value="${String(f.style.strokeWidth)}"/>`,
@@ -111,7 +119,7 @@ function eventXml(
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
     `<event version="2.0" uid="${esc(f.id)}" type="${esc(type)}" how="h-g-i-g-o" time="${time}" start="${time}" stale="${stale}">`,
-    `  <point lat="${String(lat)}" lon="${String(lon)}" hae="9999999.0" ce="9999999.0" le="9999999.0"/>`,
+    `  <point lat="${fmtCoord(lat)}" lon="${fmtCoord(lon)}" hae="9999999.0" ce="9999999.0" le="9999999.0"/>`,
     "  <detail>",
     `    <contact callsign="${esc(f.name)}"/>`,
     `    <remarks>${esc(f.remarks ?? "")}</remarks>`,
@@ -159,7 +167,7 @@ export function buildCotEvents(
         const detail = [
           ...ring.map(
             ([lon, lat]) =>
-              `    <link point="${String(lat)},${String(lon)},0.0"/>`,
+              `    <link point="${fmtCoord(lat)},${fmtCoord(lon)},0.0"/>`,
           ),
           ...shapeStyleLines(f),
           '    <labels_on value="true"/>',
@@ -195,7 +203,7 @@ export function buildCotEvents(
         const detail = [
           ...verts.map(
             ([lon, lat], i) =>
-              `    <link uid="${esc(f.id)}.${i}" callsign="" type="b-m-p-w" point="${String(lat)},${String(lon)},0.0" remarks="" relation="c"/>`,
+              `    <link uid="${esc(f.id)}.${i}" callsign="" type="b-m-p-w" point="${fmtCoord(lat)},${fmtCoord(lon)},0.0" remarks="" relation="c"/>`,
           ),
           `    <link_attr planningmethod="Infil" color="${color}" method="Driving" prefix="CP" type="On Foot" stroke="${String(f.style.strokeWidth)}"/>`,
         ];

@@ -22,6 +22,19 @@ export function esc(value: string): string {
     .replace(/'/g, "&apos;");
 }
 
+/**
+ * Format a coordinate (degrees) for KML/CoT. `String(n)` emits scientific
+ * notation for small magnitudes (e.g. a circle tessellated near the equator
+ * yields deltas like 5.5e-19), which ATAK's KML coordinate parser rejects —
+ * dropping the whole geometry. Fixed decimals (8 dp ≈ 1.1 mm) never use an
+ * exponent; near-zero values snap to 0 and trailing zeros are trimmed.
+ */
+export function fmtCoord(n: number): string {
+  if (!Number.isFinite(n)) return "0";
+  if (Math.abs(n) < 1e-9) return "0";
+  return n.toFixed(8).replace(/\.?0+$/, "");
+}
+
 function parseHex(hex: string): { r: number; g: number; b: number } {
   const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
   if (!m) return { r: 255, g: 255, b: 255 };

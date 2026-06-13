@@ -288,8 +288,12 @@ textarea {
 
 .app-body {
   display: grid;
-  grid-template-columns: 300px 1fr 320px;
+  /* Map column never shrinks below a usable width; on a too-narrow window the
+     grid overflows and app-body scrolls horizontally instead of collapsing the
+     map to nothing under the fixed-width sidebars. */
+  grid-template-columns: 300px minmax(320px, 1fr) 320px;
   min-height: 0;
+  overflow-x: auto;
 }
 
 .sidebar {
@@ -301,6 +305,14 @@ textarea {
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* Sidebar panels must keep their natural height so the sidebar scrolls.
+   A flex item with overflow:hidden (like .panel) gets an automatic
+   min-height of 0, so without this flexbox would shrink it to fit and the
+   panel's own overflow:hidden would clip the list instead of scrolling. */
+.sidebar > * {
+  flex-shrink: 0;
 }
 
 .sidebar-left {
@@ -504,6 +516,15 @@ textarea {
   white-space: nowrap;
 }
 
+/* License chips can be long; cap and ellipsize (full text stays in title). */
+.chip-license {
+  display: inline-block;
+  max-width: 16ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: bottom;
+}
+
 .feature-row {
   display: flex;
   align-items: center;
@@ -658,6 +679,11 @@ textarea {
   z-index: 1100; /* above leaflet panes/controls (≤1000) */
   display: flex;
   align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  /* Never run under the map edges; wrap the draft sub-controls instead of
+     overrunning the corner zoom control. */
+  max-width: calc(100% - 24px);
   gap: 3px;
   padding: 5px;
   background: rgba(13, 16, 12, 0.92);

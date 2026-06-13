@@ -81,9 +81,16 @@ async function writeZip(zipPath: string, files: ZipFile[]): Promise<void> {
   await new Promise<void>((resolve, reject) => {
     const out = createWriteStream(zipPath);
     const archive = archiver("zip", { zlib: { level: 6 } });
+    // Tear down both streams on error so the output fd is released — otherwise
+    // the open handle can make the caller's cleanup rm() throw EBUSY on Windows.
+    const fail = (err: unknown) => {
+      archive.destroy();
+      out.destroy();
+      reject(err);
+    };
     out.on("close", resolve);
-    out.on("error", reject);
-    archive.on("error", reject);
+    out.on("error", fail);
+    archive.on("error", fail);
     archive.pipe(out);
     for (const f of files) {
       if (typeof f.content === "object" && !Buffer.isBuffer(f.content)) {
@@ -213,6 +220,16 @@ export async function buildPackage(
           throw new Error(`Source ${source.name} returned no image for the AOI`);
         }
         if (image.warnings?.length) warnings.push(...image.warnings);
+        // The GroundOverlay LatLonBox is linear-in-degrees but the stitched
+        // image is linear-in-Web-Mercator; the vertical mismatch grows with AOI
+        // height and latitude (negligible for small AOIs, ~hundreds of m for a
+        // 1°-tall box at mid-latitudes). Steer large areas to gpkg mode.
+        if (request.aoi.north - request.aoi.south > 0.5) {
+          warnings.push(
+            "KMZ-GRG imagery can be vertically misregistered for tall areas; " +
+              "use GeoPackage (gpkg) mode for large AOIs.",
+          );
+        }
         progress({ phase: "writing grg kmz", percent: 50 });
         const kmzTemp = path.join(outDir, `${jobId}-grg.kmz`);
         tempFiles.push(kmzTemp);
@@ -242,6 +259,22 @@ export async function buildPackage(
     const featureByUid = new Map<string, MapFeature>(
       request.features.map((f) => [f.id, f]),
     );
+    // CoT u-d-f shapes have no interior-ring representation, so polygon holes
+    // are exported solid in CoT (the KML overlay keeps them). Surface the
+    // divergence rather than dropping it silently.
+    const holed = request.features.filter(
+      (f) =>
+        (f.kind === "polygon" || f.kind === "rectangle") &&
+        f.geometry.type === "Polygon" &&
+        f.geometry.coordinates.length > 1,
+    ).length;
+    if (holed > 0) {
+      warnings.push(
+        `${holed} polygon(s) with holes exported as solid CoT shapes ` +
+          "(holes preserved in the KML overlay only).",
+      );
+    }
+
     const cotFiles = buildCotEvents(request.features, input.determinism);
     for (const cot of cotFiles) {
       const entry = `${cot.uid}/${cot.uid}.cot`;

@@ -15,8 +15,18 @@ function KeyInputRow({ source }: { source: ImagerySourceDef }) {
   const setStoredKey = useAppStore((s) => s.setStoredKey);
 
   return (
-    <div className="key-input-row">
-      <label className="label">{source.keyLabel ?? "API key"}</label>
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 4,
+        marginTop: 6,
+        width: "100%",
+      }}
+    >
+      <label className="label" style={{ margin: 0 }}>
+        {source.keyLabel ?? "API key"}
+      </label>
       <input
         className="input"
         type="password"
@@ -25,7 +35,14 @@ function KeyInputRow({ source }: { source: ImagerySourceDef }) {
         value={value}
         onChange={(e) => setStoredKey(keyId, e.target.value)}
       />
-      <span className="label" style={{ opacity: 0.6 }}>
+      <span
+        style={{
+          opacity: 0.6,
+          fontSize: "0.66rem",
+          color: "var(--text-1)",
+          lineHeight: 1.3,
+        }}
+      >
         saved locally — sent only with exports you start
       </span>
     </div>
@@ -51,33 +68,57 @@ function SourceRow({
         className="panel-row"
         style={{ display: "flex", alignItems: "center", gap: 6 }}
       >
-        <input
-          type="radio"
-          name="preview-source"
-          checked={active}
-          disabled={isPlanet}
-          onChange={onSelect}
-        />
-        <span style={{ flex: 1, minWidth: 0 }}>
-          <span>{source.name}</span>{" "}
-          <span className="chip" title="zoom range">
-            z{source.minZoom}–{source.maxZoom}
-          </span>{" "}
-          <span className="chip" title={source.license}>
-            {source.license}
-          </span>{" "}
-          {source.streamOnly && (
-            <span className="chip warning-text" title="Offline packaging forbidden by license — streaming XML only">
-              stream-only
+        {/* Whole label is the click target so picking the source name works,
+            not just the small radio dot. */}
+        <label
+          style={{
+            flex: 1,
+            minWidth: 0,
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 6,
+            cursor: isPlanet ? "not-allowed" : "pointer",
+          }}
+        >
+          <input
+            type="radio"
+            name="preview-source"
+            checked={active}
+            disabled={isPlanet}
+            onChange={onSelect}
+            style={{ marginTop: 3, flexShrink: 0 }}
+          />
+          <span
+            style={{
+              flex: 1,
+              minWidth: 0,
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: 4,
+            }}
+          >
+            <span>{source.name}</span>
+            <span className="chip" title="zoom range">
+              z{source.minZoom}–{source.maxZoom}
             </span>
-          )}
-        </span>
+            <span className="chip chip-license" title={source.license}>
+              {source.license}
+            </span>
+            {source.streamOnly && (
+              <span className="chip warning-text" title="Offline packaging forbidden by license — streaming XML only">
+                stream-only
+              </span>
+            )}
+          </span>
+        </label>
         {hasKeyEntry && (
           <button
             type="button"
             className="btn btn-ghost"
             title={source.keyLabel ?? "API key"}
             onClick={() => setKeyOpen((v) => !v)}
+            style={{ flexShrink: 0 }}
           >
             {keyOpen ? "▴ key" : "▾ key"}
           </button>

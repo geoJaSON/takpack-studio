@@ -42,6 +42,7 @@ export class JobStore {
   private readonly selectStmt: Database.Statement;
   private readonly listStmt: Database.Statement;
   private readonly updateStmt: Database.Statement;
+  private readonly deleteStmt: Database.Statement;
 
   constructor(dataDir: string) {
     mkdirSync(dataDir, { recursive: true });
@@ -74,6 +75,7 @@ export class JobStore {
         artifact_path = ?, artifact_name = ?, size_bytes = ?, updated_at = ?
        WHERE id = ?`,
     );
+    this.deleteStmt = this.db.prepare(`DELETE FROM jobs WHERE id = ?`);
   }
 
   create(): JobRecord {
@@ -134,6 +136,11 @@ export class JobStore {
       id,
     );
     return next;
+  }
+
+  /** Remove a job record. (Boot-time retention pruning of old completed jobs.) */
+  delete(id: string): void {
+    this.deleteStmt.run(id);
   }
 
   /**
