@@ -28,6 +28,7 @@ import AnnotationLayer from "./AnnotationLayer";
 
 const KIND_LABEL: Record<FeatureKind, string> = {
   marker: "Marker",
+  label: "Label",
   line: "Line",
   route: "Route",
   polygon: "Polygon",
@@ -43,14 +44,17 @@ function nextName(existing: MapFeature[], kind: FeatureKind): string {
 function defaultStyle(kind: FeatureKind): FeatureStyle {
   switch (kind) {
     case "line":
+      return { stroke: "#00e5ff", strokeOpacity: 1, strokeWidth: 3, lineStyle: "solid" };
     case "route":
-      return { stroke: "#00e5ff", strokeOpacity: 1, strokeWidth: 3 };
+      // Routes read as routes when dashed by default.
+      return { stroke: "#00e5ff", strokeOpacity: 1, strokeWidth: 3, lineStyle: "dashed" };
     case "polygon":
     case "rectangle":
       return {
         stroke: "#ffaa00",
         strokeOpacity: 1,
         strokeWidth: 2,
+        lineStyle: "solid",
         fill: "#ffaa00",
         fillOpacity: 0.15,
       };
@@ -59,9 +63,12 @@ function defaultStyle(kind: FeatureKind): FeatureStyle {
         stroke: "#ff5577",
         strokeOpacity: 1,
         strokeWidth: 2,
+        lineStyle: "solid",
         fill: "#ff5577",
         fillOpacity: 0.1,
       };
+    case "label":
+      return { stroke: "#ffd24d", strokeOpacity: 1, strokeWidth: 2 };
     case "marker":
       return { stroke: "#ffaa00", strokeOpacity: 1, strokeWidth: 2 };
   }
@@ -181,6 +188,13 @@ function MapController() {
               sidc: applyAffiliation(s.activeSidc, s.activeAffiliation),
               affiliation: s.activeAffiliation,
             }),
+          );
+          break;
+
+        case "label":
+          // Text label: name is the text; user edits it in the feature panel.
+          s.addFeature(
+            buildFeature("label", { type: "Point", coordinates: p }, s.features),
           );
           break;
 

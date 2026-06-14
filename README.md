@@ -9,7 +9,7 @@ export a `.zip` that ATAK imports cleanly — with **real offline imagery**.
 | Payload | Format | Why |
 |---|---|---|
 | Offline imagery | **GeoPackage** (`.gpkg`) — EPSG:3857 GoogleMapsCompatible 256px tile pyramid | The format ATAK's importer reads CRS metadata from; multi-zoom offline basemap, not a single stretched picture |
-| Markers / shapes / routes | **CoT event files** (`.cot`) | Import as *native, editable* ATAK objects with proper 2525 symbology — not generic pins |
+| Markers / labels / shapes / routes | **CoT event files** (`.cot`) | Import as *native, editable* ATAK objects with proper 2525 symbology, on-map name labels, and dashed/dotted line styles (ATAK 4.5.1+) — not generic pins |
 | Styled overlay | **KML** (aabbggrr colors, escaped, circles tessellated) | Visual backup of all graphics incl. plain lines |
 | Streaming sources | **MOBAC `customMapSource` XML** | For sources whose ToS forbid offline packaging (Esri, Mapbox, OSM…) — users stream + self-cache in ATAK legally |
 | Manifest | `MANIFEST/manifest.xml` (Mission Package v2) | uid + name, exact zipEntry paths, CoT/KML content typing |

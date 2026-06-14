@@ -289,21 +289,12 @@ export async function buildPackage(
 
     const sourcesForAttribution: ImagerySourceDef[] = [...usedSources];
 
-    // Kind 'line' features exist ONLY in the KML overlay (no CoT). When the
-    // overlay is opted out but line features exist, still emit an overlay
-    // containing just those lines (with a warning) — otherwise they would be
-    // silently dropped from the package.
+    // Every feature also exports as an editable CoT object; the KML overlay is
+    // a styled visual copy (and the only place polygon holes + clean text
+    // labels survive). Honor the opt-out fully — nothing is lost from CoT.
     const kmlFeatures =
-      request.includeKmlOverlay !== false
-        ? request.features
-        : request.features.filter((f) => f.kind === "line");
+      request.includeKmlOverlay !== false ? request.features : [];
     if (kmlFeatures.length > 0) {
-      if (request.includeKmlOverlay === false) {
-        warnings.push(
-          `${kmlFeatures.length} line feature(s) export only via the KML overlay; ` +
-            "included a KML overlay containing only those lines despite includeKmlOverlay=false",
-        );
-      }
       const kmlDescription =
         usedSources.length > 0
           ? usedSources.map(sourceAttributionLine).join("; ")

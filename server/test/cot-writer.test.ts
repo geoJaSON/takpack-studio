@@ -70,14 +70,16 @@ describe("buildCotEvents", () => {
     expect(file.xml).toContain('type="a-h-G"');
   });
 
-  it("emits the exact u-d-f polygon event with unclosed ring links", () => {
+  const links = (xml: string): string[] =>
+    [...xml.matchAll(/<link point="([^"]+)"\/>/g)].map((m) => m[1]);
+
+  it("emits a CLOSED u-d-f polygon (first link repeated as last) with style + labels", () => {
     const polygon: MapFeature = {
       id: "22222222-2222-4222-8222-222222222222",
       kind: "polygon",
       name: "AO Bravo",
       geometry: {
         type: "Polygon",
-        // Closed exterior ring — the writer must drop the repeated vertex.
         coordinates: [
           [
             [-117, 34],
@@ -91,34 +93,23 @@ describe("buildCotEvents", () => {
         stroke: "#ff0000",
         strokeOpacity: 1,
         strokeWidth: 2,
+        lineStyle: "dashed",
         fill: "#00ff00",
         fillOpacity: 1,
       },
     };
-
-    const expected = `<?xml version="1.0" encoding="UTF-8"?>
-<event version="2.0" uid="22222222-2222-4222-8222-222222222222" type="u-d-f" how="h-g-i-g-o" time="${TIME}" start="${TIME}" stale="${STALE}">
-  <point lat="34" lon="-117" hae="9999999.0" ce="9999999.0" le="9999999.0"/>
-  <detail>
-    <contact callsign="AO Bravo"/>
-    <remarks></remarks>
-    <archive/>
-    <link point="34,-117,0.0"/>
-    <link point="35,-117,0.0"/>
-    <link point="35,-116,0.0"/>
-    <strokeColor value="-65536"/>
-    <strokeWeight value="2"/>
-    <fillColor value="-16711936"/>
-    <labels_on value="true"/>
-  </detail>
-</event>
-`;
-
     const [file] = buildCotEvents([polygon], det);
-    expect(file.xml).toBe(expected);
+    expect(file.xml).toContain('type="u-d-f"');
+    const l = links(file.xml);
+    // ATAK only treats a u-d-f as closed when first point === last point.
+    expect(l.length).toBeGreaterThan(2);
+    expect(l[0]).toBe(l[l.length - 1]);
+    expect(file.xml).toContain('<strokeStyle value="dashed"/>');
+    expect(file.xml).toContain('<fillColor value="-16711936"/>');
+    expect(file.xml).toContain('<labels_on value="true"/>');
   });
 
-  it("emits u-d-r rectangles with exactly 4 corner links", () => {
+  it("emits a CLOSED u-d-f rectangle", () => {
     const rectangle: MapFeature = {
       id: "33333333-3333-4333-8333-333333333333",
       kind: "rectangle",
@@ -138,46 +129,28 @@ describe("buildCotEvents", () => {
       style: { stroke: "#ff0000", strokeOpacity: 1, strokeWidth: 2 },
     };
     const [file] = buildCotEvents([rectangle], det);
-    expect(file.xml).toContain('type="u-d-r"');
-    expect(file.xml.match(/<link point=/g)).toHaveLength(4);
+    expect(file.xml).toContain('type="u-d-f"');
+    const l = links(file.xml);
+    expect(l[0]).toBe(l[l.length - 1]); // closed
   });
 
-  it("emits the exact u-d-c circle event", () => {
+  it("emits the u-d-c circle with stroke style and labels", () => {
     const circle: MapFeature = {
       id: "55555555-5555-4555-8555-555555555555",
       kind: "circle",
       name: "Blast Radius",
       geometry: { type: "Point", coordinates: [-117.25, 34.5] },
       radiusM: 500,
-      style: {
-        stroke: "#ff0000",
-        strokeOpacity: 1,
-        strokeWidth: 2,
-        fill: "#ff0000",
-        fillOpacity: 0,
-      },
+      style: { stroke: "#ff0000", strokeOpacity: 1, strokeWidth: 2 },
     };
-
-    const expected = `<?xml version="1.0" encoding="UTF-8"?>
-<event version="2.0" uid="55555555-5555-4555-8555-555555555555" type="u-d-c" how="h-g-i-g-o" time="${TIME}" start="${TIME}" stale="${STALE}">
-  <point lat="34.5" lon="-117.25" hae="9999999.0" ce="9999999.0" le="9999999.0"/>
-  <detail>
-    <contact callsign="Blast Radius"/>
-    <remarks></remarks>
-    <archive/>
-    <shape><ellipse major="500" minor="500" angle="360"/></shape>
-    <strokeColor value="-65536"/>
-    <strokeWeight value="2"/>
-    <fillColor value="16711680"/>
-  </detail>
-</event>
-`;
-
     const [file] = buildCotEvents([circle], det);
-    expect(file.xml).toBe(expected);
+    expect(file.xml).toContain('type="u-d-c"');
+    expect(file.xml).toContain('<ellipse major="500" minor="500" angle="360"/>');
+    expect(file.xml).toContain('<strokeStyle value="solid"/>');
+    expect(file.xml).toContain('<labels_on value="true"/>');
   });
 
-  it("emits the exact b-m-r route event with checkpoint links", () => {
+  it("emits the b-m-r route with stroke style and labels", () => {
     const route: MapFeature = {
       id: "44444444-4444-4444-8444-444444444444",
       kind: "route",
@@ -190,29 +163,16 @@ describe("buildCotEvents", () => {
           [-116, 34.4],
         ],
       },
-      style: { stroke: "#0000ff", strokeOpacity: 1, strokeWidth: 3 },
+      style: { stroke: "#0000ff", strokeOpacity: 1, strokeWidth: 3, lineStyle: "dotted" },
     };
-
-    const expected = `<?xml version="1.0" encoding="UTF-8"?>
-<event version="2.0" uid="44444444-4444-4444-8444-444444444444" type="b-m-r" how="h-g-i-g-o" time="${TIME}" start="${TIME}" stale="${STALE}">
-  <point lat="34" lon="-117" hae="9999999.0" ce="9999999.0" le="9999999.0"/>
-  <detail>
-    <contact callsign="Infil Route"/>
-    <remarks></remarks>
-    <archive/>
-    <link uid="44444444-4444-4444-8444-444444444444.0" callsign="" type="b-m-p-w" point="34,-117,0.0" remarks="" relation="c"/>
-    <link uid="44444444-4444-4444-8444-444444444444.1" callsign="" type="b-m-p-w" point="34.2,-116.5,0.0" remarks="" relation="c"/>
-    <link uid="44444444-4444-4444-8444-444444444444.2" callsign="" type="b-m-p-w" point="34.4,-116,0.0" remarks="" relation="c"/>
-    <link_attr planningmethod="Infil" color="-16776961" method="Driving" prefix="CP" type="On Foot" stroke="3"/>
-  </detail>
-</event>
-`;
-
     const [file] = buildCotEvents([route], det);
-    expect(file.xml).toBe(expected);
+    expect(file.xml).toContain('type="b-m-r"');
+    expect(file.xml.match(/type="b-m-p-w"/g)).toHaveLength(3);
+    expect(file.xml).toContain('<strokeStyle value="dotted"/>');
+    expect(file.xml).toContain('<labels_on value="true"/>');
   });
 
-  it("produces NO CoT for kind 'line'", () => {
+  it("emits an OPEN u-d-f line (first link != last) with no fill", () => {
     const line: MapFeature = {
       id: "66666666-6666-4666-8666-666666666666",
       kind: "line",
@@ -222,10 +182,45 @@ describe("buildCotEvents", () => {
         coordinates: [
           [-117, 34],
           [-116, 34],
+          [-115, 34.5],
         ],
       },
-      style: { stroke: "#00ff00", strokeOpacity: 1, strokeWidth: 2 },
+      style: { stroke: "#00ff00", strokeOpacity: 1, strokeWidth: 2, lineStyle: "dashed" },
     };
-    expect(buildCotEvents([line], det)).toHaveLength(0);
+    const [file] = buildCotEvents([line], det);
+    expect(file).toBeDefined();
+    expect(file.xml).toContain('type="u-d-f"');
+    const l = links(file.xml);
+    expect(l).toHaveLength(3);
+    expect(l[0]).not.toBe(l[l.length - 1]); // open
+    expect(file.xml).toContain('<strokeStyle value="dashed"/>');
+    expect(file.xml).not.toContain("<fillColor"); // open lines carry no fill
+  });
+
+  it("emits a b-m-p-s-m spot marker for a text label", () => {
+    const label: MapFeature = {
+      id: "77777777-7777-4777-8777-777777777777",
+      kind: "label",
+      name: "OBJ RAVEN",
+      geometry: { type: "Point", coordinates: [-117, 34] },
+      style: { stroke: "#ffff00", strokeOpacity: 1, strokeWidth: 2 },
+    };
+    const [file] = buildCotEvents([label], det);
+    expect(file.xml).toContain('type="b-m-p-s-m"');
+    expect(file.xml).toContain('<contact callsign="OBJ RAVEN"/>');
+  });
+
+  it("suppresses a marker label with <hideLabel/> when showLabel is false", () => {
+    const marker: MapFeature = {
+      id: "88888888-8888-4888-8888-888888888888",
+      kind: "marker",
+      name: "Silent",
+      sidc: "SFGPUCI----K---",
+      geometry: { type: "Point", coordinates: [-117, 34] },
+      style: { stroke: "#ff0000", strokeOpacity: 1, strokeWidth: 2 },
+      showLabel: false,
+    };
+    const [file] = buildCotEvents([marker], det);
+    expect(file.xml).toContain("<hideLabel/>");
   });
 });

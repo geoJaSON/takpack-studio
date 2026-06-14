@@ -38,19 +38,24 @@ export type Affiliation = "friendly" | "hostile" | "neutral" | "unknown";
 
 /**
  * marker    — Point, milsymbol SIDC, exports as CoT a-* event
- * line      — LineString graphic, exports to KML only
+ * label     — Point, text-only label, exports as CoT b-m-p-s-m + KML label
+ * line      — LineString, exports as CoT u-d-f OPEN polyline + KML
  * route     — LineString, exports as CoT b-m-r route
- * polygon   — Polygon, exports as CoT u-d-f + KML
+ * polygon   — Polygon, exports as CoT u-d-f CLOSED + KML
  * rectangle — Polygon (4 corners), exports as CoT u-d-r + KML
  * circle    — Point center + radiusM, exports as CoT u-d-c + tessellated KML
  */
 export type FeatureKind =
   | "marker"
+  | "label"
   | "line"
   | "route"
   | "polygon"
   | "rectangle"
   | "circle";
+
+/** Stroke pattern. ATAK CoT supports these exact values via <strokeStyle>. */
+export type LineStyle = "solid" | "dashed" | "dotted" | "outlined";
 
 export interface FeatureStyle {
   /** '#rrggbb' */
@@ -59,6 +64,8 @@ export interface FeatureStyle {
   strokeOpacity: number;
   /** pixels / CoT strokeWeight */
   strokeWidth: number;
+  /** Stroke pattern (default 'solid'). Lines/routes/shapes only. */
+  lineStyle?: LineStyle;
   /** '#rrggbb' — polygons/rectangles/circles */
   fill?: string;
   /** 0..1 */
@@ -69,7 +76,7 @@ export interface MapFeature {
   /** UUID v4 — becomes the CoT event uid. */
   id: string;
   kind: FeatureKind;
-  /** Display name / callsign. */
+  /** Display name / callsign / label text. */
   name: string;
   /** MIL-STD-2525C 15-char SIDC (markers only). */
   sidc?: string;
@@ -79,6 +86,8 @@ export interface MapFeature {
   radiusM?: number;
   style: FeatureStyle;
   remarks?: string;
+  /** Show the feature's name as an on-map label (default true). */
+  showLabel?: boolean;
 }
 
 // ───────────────────────────── Imagery catalog ─────────────────────────────

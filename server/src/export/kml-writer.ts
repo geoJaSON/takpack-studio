@@ -109,6 +109,21 @@ function featureParts(f: MapFeature): { style: string[]; geom: string[] } {
         ],
       };
     }
+    case "label": {
+      // Label-only: zero-scale icon + empty Icon collapses the marker bitmap
+      // (ATAK's OGR style parser drops the SYMBOL when scale is 0), leaving the
+      // <name> + LabelStyle rendering as on-map text.
+      const c = kmlColor(f.style.stroke, f.style.strokeOpacity);
+      return {
+        style: [
+          "        <IconStyle><scale>0</scale><Icon></Icon></IconStyle>",
+          `        <LabelStyle><color>${c}</color><scale>1.0</scale></LabelStyle>`,
+        ],
+        geom: [
+          `      <Point><coordinates>${coordString([requirePoint(f)])}</coordinates></Point>`,
+        ],
+      };
+    }
     case "line":
     case "route":
       return {

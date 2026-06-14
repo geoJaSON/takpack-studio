@@ -274,15 +274,17 @@ describe("buildPackage integration", () => {
     for (const entry of output.entries) expect(zipNames).toContain(entry);
   });
 
-  it("emits exactly 5 .cot events (line excluded) at <uid>/<uid>.cot", () => {
+  it("emits one .cot per feature (incl. the open line) at <uid>/<uid>.cot", () => {
     const cots = zipNames.filter((n) => n.endsWith(".cot"));
-    expect(cots.length).toBe(5);
+    // 2 markers + polygon + route + circle + line = 6 editable CoT objects.
+    expect(cots.length).toBe(6);
     for (const c of cots) {
       const m = /^([^/]+)\/([^/]+)\.cot$/.exec(c);
       expect(m).not.toBeNull();
       expect(m![1]).toBe(m![2]);
-      expect(m![1]).not.toBe(lineId);
     }
+    // the line now exports as a CoT object too (open u-d-f)
+    expect(cots).toContain(`${lineId}/${lineId}.cot`);
   });
 
   it("includes the styled KML overlay", () => {
@@ -532,11 +534,11 @@ describe("buildPackage keyed map-source XML credential guard", () => {
   });
 });
 
-describe("buildPackage KML overlay opt-out with line features", () => {
-  it("emits a lines-only overlay plus a warning when includeKmlOverlay=false", async () => {
+describe("buildPackage KML overlay opt-out", () => {
+  it("emits no overlay when includeKmlOverlay=false but still exports the line as CoT", async () => {
     const outDir = mkdtempSync(path.join(os.tmpdir(), "pkg-lines-"));
     try {
-      const { features } = makeFeatures();
+      const { features, lineId } = makeFeatures();
       const output = await buildPackage({
         request: {
           packageName: "Lines",
@@ -552,25 +554,18 @@ describe("buildPackage KML overlay opt-out with line features", () => {
         limits: LIMITS,
         onProgress: () => {},
       });
-      const entry = output.entries.find((e) => e.endsWith("/overlays.kml"));
-      expect(entry).toBeDefined();
-      const zip = new AdmZip(output.zipPath);
-      const xml = zip.readAsText(entry!);
-      // ONLY the line feature — the opt-out still applies to everything else.
-      expect((xml.match(/<Placemark>/g) ?? []).length).toBe(1);
-      expect(xml).toContain("Phase Line Gold");
-      expect(xml).not.toContain("Alpha");
+      // No KML overlay at all — every feature (incl. the line) is now a CoT.
+      expect(output.entries.some((e) => e.endsWith("/overlays.kml"))).toBe(false);
+      expect(output.entries).toContain(`${lineId}/${lineId}.cot`);
       expect(
-        output.warnings.some(
-          (w) => w.includes("line feature") && w.includes("includeKmlOverlay"),
-        ),
-      ).toBe(true);
+        output.warnings.some((w) => w.includes("includeKmlOverlay")),
+      ).toBe(false);
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }
   });
 
-  it("emits no overlay and no warning when there are no line features", async () => {
+  it("emits no overlay when overlay is opted out (no-feature baseline)", async () => {
     const outDir = mkdtempSync(path.join(os.tmpdir(), "pkg-nolines-"));
     try {
       const marker: MapFeature = {

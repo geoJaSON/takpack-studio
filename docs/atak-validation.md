@@ -19,11 +19,18 @@ importfiles/sort/*). What is verified **locally** by the test suite:
 3. Confirm markers import as native, editable 2525 symbols (correct affiliation
    color/shape), not generic pins.
 4. Confirm routes import as editable ATAK routes (u-d / b-m-r details honored).
-5. Confirm polygon/rectangle/circle shapes render with stroke + fill colors.
-6. Confirm the KML overlay renders with matching colors (no red/blue swap).
-7. Confirm map-source XML files appear in the map source list and stream tiles.
-8. KMZ-GRG mode: confirm the GroundOverlay registers at the right location.
-9. Note your ATAK version and any deviations here.
+5. Confirm polygon/rectangle shapes import **closed and filled** (not as open
+   unfilled lines) — closure depends on the first/last `<link>` point matching.
+6. Confirm `line` features import as **open** polylines (ends not joined).
+7. Confirm circle shapes render with stroke + fill colors.
+8. Confirm **labels**: marker callsigns show; shape names show on the shape
+   (`<labels_on>`); a `label` feature shows its text (small spot marker).
+9. Confirm **line styles** (dashed / dotted / outlined) render — needs ATAK
+   ≈4.5.1+; older clients fall back to solid.
+10. Confirm the KML overlay renders with matching colors (no red/blue swap).
+11. Confirm map-source XML files appear in the map source list and stream tiles.
+12. KMZ-GRG mode: confirm the GroundOverlay registers at the right location.
+13. Note your ATAK version and any deviations here.
 
 ## Known unknowns (validate on device, adjust writers if needed)
 
@@ -32,6 +39,15 @@ importfiles/sort/*). What is verified **locally** by the test suite:
   `server/src/export/cot-writer.ts`.
 - CoT `b-m-r` route `link_attr` attribute set is the common community shape; some
   ATAK versions may want `__routeinfo`/navcues for full editability.
+- `rectangle` exports as a CLOSED `u-d-f` polygon (4 corners + repeated first
+  vertex), not `u-d-r`. It renders as a filled quadrilateral; if you need true
+  rectangle edit-handles on device, switch the rectangle case back to `u-d-r`.
+- `label` features export as a `b-m-p-s-m` spot marker (text in the callsign);
+  ATAK has no icon-less label CoT, so a small spot icon remains. The clean
+  text-only form is in the KML overlay (zero-scale icon + `<LabelStyle>`).
+- `<strokeStyle>` (dashed/dotted/outlined) is honored only on ATAK ≈4.5.1+;
+  KML cannot carry dash patterns at all (ATAK forces KML lines solid), so the
+  dash lives in the CoT object — the KML overlay copy stays solid.
 - Package-level `onReceiveImport` only affects network-received packages; local
   imports always go through content sniffing.
 - KMZ-GRG mode writes a degrees-linear `<LatLonBox>` over a Web-Mercator-linear

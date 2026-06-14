@@ -39,6 +39,14 @@ const TOOLS: { id: ToolType; label: string; glyph: ReactElement }[] = [
     ]),
   },
   {
+    id: "label",
+    label: "Text label",
+    glyph: icon([
+      <path key="b" d="M3.5 4.5h11" />,
+      <path key="s" d="M9 4.5v10" />,
+    ]),
+  },
+  {
     id: "line",
     label: "Line (KML only)",
     glyph: icon([

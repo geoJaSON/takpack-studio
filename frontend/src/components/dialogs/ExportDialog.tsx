@@ -80,6 +80,7 @@ function defaultZooms(src: ImagerySourceDef): { min: number; max: number } {
 
 const KIND_LABELS: Record<FeatureKind, string> = {
   marker: "marker",
+  label: "label",
   line: "line",
   route: "route",
   polygon: "polygon",
@@ -490,8 +491,9 @@ export default function ExportDialog() {
                 <div className="label">FEATURES</div>
                 <div className="panel-row">{featureSummary(features)}</div>
                 {lineCount > 0 && (
-                  <div className="warning-text">
-                    Lines export to KML only (no editable CoT object).
+                  <div className="warning-text" style={{ opacity: 0.85 }}>
+                    Dashed / dotted styling renders on ATAK 4.5.1+; the KML
+                    overlay is always solid.
                   </div>
                 )}
               </div>

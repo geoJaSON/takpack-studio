@@ -9,7 +9,12 @@ import {
   sameSymbol,
 } from "../../lib/milsymbol-utils";
 import { featuresFromGeoJson } from "../../lib/geojson-import";
-import type { Affiliation, FeatureKind, MapFeature } from "../../types";
+import type {
+  Affiliation,
+  FeatureKind,
+  LineStyle,
+  MapFeature,
+} from "../../types";
 
 /**
  * Right sidebar: milsymbol palette, feature list, selected-feature editor,
@@ -18,6 +23,7 @@ import type { Affiliation, FeatureKind, MapFeature } from "../../types";
 
 const KIND_GLYPHS: Record<FeatureKind, string> = {
   marker: "◉",
+  label: "T",
   line: "╱",
   route: "➔",
   polygon: "⬠",
@@ -26,6 +32,19 @@ const KIND_GLYPHS: Record<FeatureKind, string> = {
 };
 
 const AREA_KINDS: FeatureKind[] = ["polygon", "rectangle", "circle"];
+const STROKE_KINDS: FeatureKind[] = [
+  "line",
+  "route",
+  "polygon",
+  "rectangle",
+  "circle",
+];
+const LINE_STYLE_OPTIONS: { value: LineStyle; label: string }[] = [
+  { value: "solid", label: "Solid" },
+  { value: "dashed", label: "Dashed" },
+  { value: "dotted", label: "Dotted" },
+  { value: "outlined", label: "Outlined" },
+];
 
 function FeatureRow({
   feature,
@@ -146,6 +165,7 @@ function FeatureEditor({ feature }: { feature: MapFeature }) {
     });
 
   const isArea = AREA_KINDS.includes(feature.kind);
+  const hasStroke = STROKE_KINDS.includes(feature.kind);
 
   return (
     <div className="panel-section">
@@ -226,6 +246,44 @@ function FeatureEditor({ feature }: { feature: MapFeature }) {
           style={{ flex: 1 }}
         />
       </div>
+
+      {hasStroke && (
+        <div className="panel-row">
+          <label className="label" htmlFor="feat-linestyle">
+            LINE STYLE
+          </label>
+          <select
+            id="feat-linestyle"
+            className="select"
+            value={feature.style.lineStyle ?? "solid"}
+            onChange={(e) =>
+              patchStyle({ lineStyle: e.target.value as LineStyle })
+            }
+          >
+            {LINE_STYLE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      <label
+        className="panel-row"
+        style={{ display: "flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+      >
+        <input
+          type="checkbox"
+          checked={feature.showLabel !== false}
+          onChange={(e) =>
+            updateFeature(feature.id, { showLabel: e.target.checked })
+          }
+        />
+        <span className="label" style={{ margin: 0 }}>
+          {feature.kind === "label" ? "Show on map" : "Show name label"}
+        </span>
+      </label>
 
       {isArea && (
         <div className="panel-row" style={{ display: "flex", gap: 6, alignItems: "center" }}>

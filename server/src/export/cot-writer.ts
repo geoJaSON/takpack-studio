@@ -81,8 +81,21 @@ function requireExteriorRing(f: MapFeature): Position[] {
   return f.geometry.coordinates[0];
 }
 
-/** CoT shape links must NOT repeat the first vertex — drop a closing vertex. */
-function unclosedRing(ring: Position[]): Position[] {
+/**
+ * Close a ring for CoT: ATAK (EditablePolyline.setPoints) marks a u-d-f shape
+ * CLOSED only when there are >2 links and the first link point equals the last.
+ * So a filled polygon MUST repeat its first vertex as the final link.
+ */
+function closedRing(ring: Position[]): Position[] {
+  if (ring.length < 3) return ring;
+  const first = ring[0];
+  const last = ring[ring.length - 1];
+  if (first[0] === last[0] && first[1] === last[1]) return ring;
+  return [...ring, first];
+}
+
+/** Open polyline: first link must NOT equal the last, or ATAK closes it. */
+function openRing(ring: Position[]): Position[] {
   if (ring.length > 1) {
     const first = ring[0];
     const last = ring[ring.length - 1];
@@ -91,20 +104,36 @@ function unclosedRing(ring: Position[]): Position[] {
   return ring;
 }
 
-function shapeStyleLines(f: MapFeature): string[] {
-  const stroke = argbColor(f.style.stroke, f.style.strokeOpacity);
+const DASH_STYLES = new Set(["dashed", "dotted", "outlined"]);
+/** <strokeStyle> value — ATAK accepts solid|dashed|dotted|outlined (v4.5.1+). */
+function strokeStyleValue(f: MapFeature): string {
+  const ls = f.style.lineStyle ?? "solid";
+  return DASH_STYLES.has(ls) ? ls : "solid";
+}
+
+/** strokeColor + strokeWeight + strokeStyle (shared by every shape and line). */
+function strokeLines(f: MapFeature): string[] {
+  return [
+    `    <strokeColor value="${argbColor(f.style.stroke, f.style.strokeOpacity)}"/>`,
+    `    <strokeWeight value="${String(f.style.strokeWidth)}"/>`,
+    `    <strokeStyle value="${strokeStyleValue(f)}"/>`,
+  ];
+}
+
+/** fillColor — only honored by ATAK on CLOSED shapes; omit for open lines. */
+function fillLine(f: MapFeature): string {
   // A chosen fill color with no explicit opacity defaults to visible; only a
   // feature with no fill color at all is fully transparent.
   const fillOpacity =
     f.style.fill !== undefined
       ? f.style.fillOpacity ?? DEFAULT_FILL_OPACITY
       : f.style.fillOpacity ?? 0;
-  const fill = argbColor(f.style.fill ?? f.style.stroke, fillOpacity);
-  return [
-    `    <strokeColor value="${stroke}"/>`,
-    `    <strokeWeight value="${String(f.style.strokeWidth)}"/>`,
-    `    <fillColor value="${fill}"/>`,
-  ];
+  return `    <fillColor value="${argbColor(f.style.fill ?? f.style.stroke, fillOpacity)}"/>`;
+}
+
+/** Show/hide the shape's name on the shape (ATAK default is hidden). */
+function labelsLine(f: MapFeature): string {
+  return `    <labels_on value="${f.showLabel === false ? "false" : "true"}"/>`;
 }
 
 function eventXml(
@@ -146,9 +175,6 @@ export function buildCotEvents(
 
   for (const f of features) {
     switch (f.kind) {
-      case "line":
-        continue; // lines are KML-only overlay graphics
-
       case "marker": {
         const point = requirePoint(f);
         const type = f.sidc
@@ -157,25 +183,61 @@ export function buildCotEvents(
         const detail = [
           `    <color argb="${argbColor(f.style.stroke, f.style.strokeOpacity)}"/>`,
         ];
+        // Marker labels show by default; <hideLabel/> suppresses the callsign.
+        if (f.showLabel === false) detail.push("    <hideLabel/>");
         out.push({ uid: f.id, xml: eventXml(f, type, point, time, stale, detail) });
+        break;
+      }
+
+      case "label": {
+        // Text-only label: a spot marker whose callsign is the text. ATAK shows
+        // a marker's callsign as the on-map label by default (there is no
+        // icon-less label CoT — the KML overlay carries the clean text version).
+        const point = requirePoint(f);
+        const detail = [
+          `    <color argb="${argbColor(f.style.stroke, f.style.strokeOpacity)}"/>`,
+        ];
+        out.push({
+          uid: f.id,
+          xml: eventXml(f, "b-m-p-s-m", point, time, stale, detail),
+        });
         break;
       }
 
       case "polygon":
       case "rectangle": {
-        const ring = unclosedRing(requireExteriorRing(f));
+        // CLOSED u-d-f: links repeat the first vertex so ATAK fills the shape.
+        const ring = closedRing(requireExteriorRing(f));
         const detail = [
           ...ring.map(
             ([lon, lat]) =>
               `    <link point="${fmtCoord(lat)},${fmtCoord(lon)},0.0"/>`,
           ),
-          ...shapeStyleLines(f),
-          '    <labels_on value="true"/>',
+          ...strokeLines(f),
+          fillLine(f),
+          labelsLine(f),
         ];
-        const type = f.kind === "rectangle" ? "u-d-r" : "u-d-f";
         out.push({
           uid: f.id,
-          xml: eventXml(f, type, ring[0], time, stale, detail),
+          xml: eventXml(f, "u-d-f", ring[0], time, stale, detail),
+        });
+        break;
+      }
+
+      case "line": {
+        // OPEN u-d-f polyline: distinct vertices (first != last), no fill.
+        const verts = openRing(requireLine(f));
+        const detail = [
+          ...verts.map(
+            ([lon, lat]) =>
+              `    <link point="${fmtCoord(lat)},${fmtCoord(lon)},0.0"/>`,
+          ),
+          ...strokeLines(f),
+          labelsLine(f),
+        ];
+        out.push({
+          uid: f.id,
+          xml: eventXml(f, "u-d-f", verts[0], time, stale, detail),
         });
         break;
       }
@@ -188,7 +250,9 @@ export function buildCotEvents(
         const r = String(f.radiusM);
         const detail = [
           `    <shape><ellipse major="${r}" minor="${r}" angle="360"/></shape>`,
-          ...shapeStyleLines(f),
+          ...strokeLines(f),
+          fillLine(f),
+          labelsLine(f),
         ];
         out.push({
           uid: f.id,
@@ -206,6 +270,8 @@ export function buildCotEvents(
               `    <link uid="${esc(f.id)}.${i}" callsign="" type="b-m-p-w" point="${fmtCoord(lat)},${fmtCoord(lon)},0.0" remarks="" relation="c"/>`,
           ),
           `    <link_attr planningmethod="Infil" color="${color}" method="Driving" prefix="CP" type="On Foot" stroke="${String(f.style.strokeWidth)}"/>`,
+          `    <strokeStyle value="${strokeStyleValue(f)}"/>`,
+          labelsLine(f),
         ];
         out.push({
           uid: f.id,

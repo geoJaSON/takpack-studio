@@ -797,3 +797,39 @@ textarea {
   background: none !important;
   border: none !important;
 }
+
+/* permanent feature name labels */
+.leaflet-tooltip.feature-label {
+  background: rgba(13, 16, 12, 0.8);
+  border: 1px solid var(--line-1);
+  border-radius: var(--radius);
+  color: var(--text-0);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.6);
+  white-space: nowrap;
+}
+.leaflet-tooltip.feature-label::before {
+  display: none;
+}
+
+/* standalone text-label markers */
+.map-text-label {
+  background: none !important;
+  border: none !important;
+  white-space: nowrap;
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 13px;
+  letter-spacing: 0.05em;
+  text-shadow: 0 0 4px #000, 0 1px 2px #000;
+  transform: translate(-50%, -50%);
+}
+.map-text-label.selected span {
+  outline: 1px solid var(--amber);
+  background: rgba(255, 170, 0, 0.18);
+  padding: 0 2px;
+}

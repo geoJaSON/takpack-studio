@@ -64,7 +64,11 @@ function cat(
   };
 }
 
-/** Ported from Tactical-Map-Pack milsymbol-utils COMMON_SYMBOLS (markers only). */
+/**
+ * MIL-STD-2525C marker catalog. Every SIDC here renders a real milsymbol icon
+ * (verified against milsymbol's symbol table — no unknown-icon placeholders).
+ * Affiliation char (index 1) is overridden at use time, so these are templates.
+ */
 export const SYMBOL_CATEGORIES: SymbolCategory[] = [
   cat("Infantry & Armor", [
     ["SFG-UCI----", "Infantry"],
@@ -80,24 +84,24 @@ export const SYMBOL_CATEGORIES: SymbolCategory[] = [
     ["SFG-UCAAD--", "Air Defense"],
     ["SFG-UCVR---", "Rotary Wing"],
     ["SFG-UCVF---", "Fixed Wing"],
-    ["SFG-UCVRH--", "Attack Helo"],
+    ["SFG-UCFM---", "Mortar"],
     ["SFG-UCVU---", "UAV"],
   ]),
   cat("Combat Support", [
     ["SFG-UCE----", "Engineer"],
     ["SFG-UCS----", "Signal"],
-    ["SFG-UCIZ---", "MP"],
-    ["SFG-UCXE---", "CBRN"],
-    ["SFG-USC----", "Civil Affairs"],
-    ["SFG-USP----", "PsyOps"],
+    ["SFG-UCIZ---", "Military Police"],
+    ["SFG-UCSG---", "Security"],
+    ["SFG-UCRC---", "Cavalry"],
+    ["SFG-UCIS---", "Sniper"],
   ]),
   cat("C2, CSS & Medical", [
-    ["SFG-UCI--H-", "HQ / CP"],
+    ["SFG-UCI---A", "HQ / CP"],
     ["SFG-USS----", "Supply"],
     ["SFG-UCM----", "Medical"],
     ["SFG-USMM---", "Maintenance"],
     ["SFG-USTM---", "Transport"],
-    ["SFF-UCI----", "Special Forces"],
+    ["SFF--------", "Special Forces"],
   ]),
   cat("Hostile — Ground", [
     ["SHG-UCI----", "Infantry"],
@@ -108,7 +112,7 @@ export const SYMBOL_CATEGORIES: SymbolCategory[] = [
     ["SHG-UCR----", "Recon"],
   ]),
   cat("Hostile — Air & Other", [
-    ["SHA-MFHA---", "Attack Helo"],
+    ["SHA-MFH----", "Rotary Wing"],
     ["SHA-MFF----", "Fixed Wing"],
     ["SUG-UC-----", "Unknown Ground"],
     ["SUA--------", "Unknown Air"],
@@ -121,19 +125,19 @@ export const SYMBOL_CATEGORIES: SymbolCategory[] = [
     ["SNG-EVC----", "Civilian"],
   ]),
   cat("Installations & Sites", [
-    ["SFG-IBF----", "Forward Base"],
-    ["SFG-IBP----", "COP / Patrol Base"],
-    ["SFG-IBM----", "Aid Station"],
+    ["SFG-IMG----", "Forward Base"],
+    ["SFG-IMM----", "Patrol Base"],
     ["SFG-IBA----", "Airfield"],
-    ["SFG-IBOS---", "Supply Depot"],
-    ["SFG-IBOF---", "Fuel Point"],
+    ["SFG-IT-----", "Supply Point"],
+    ["SFG-IRM----", "Maintenance Site"],
+    ["SFG-IUE----", "Power / Utility"],
   ]),
   cat("Equipment & Vehicles", [
     ["SFG-EVCA---", "Tank"],
     ["SFG-EVCAH--", "APC"],
     ["SFG-EVT----", "Truck"],
-    ["SFG-EVH----", "Helicopter"],
-    ["SFG-EVCA-F-", "Artillery Piece"],
+    ["SFG-EWA----", "Radar"],
+    ["SFG-EVA----", "Artillery Piece"],
     ["SHG-EVC----", "Hostile Vehicle"],
   ]),
 ];

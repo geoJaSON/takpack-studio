@@ -37,6 +37,7 @@ const styleSchema = z.object({
   stroke: z.string(),
   strokeOpacity: z.number().min(0).max(1),
   strokeWidth: z.number().min(0),
+  lineStyle: z.enum(["solid", "dashed", "dotted", "outlined"]).optional(),
   fill: z.string().optional(),
   fillOpacity: z.number().min(0).max(1).optional(),
 });
@@ -44,6 +45,7 @@ const styleSchema = z.object({
 /** Geometry type each feature kind requires (mirrors the writer invariants). */
 const KIND_GEOMETRY = {
   marker: "Point",
+  label: "Point",
   circle: "Point",
   line: "LineString",
   route: "LineString",
@@ -54,7 +56,15 @@ const KIND_GEOMETRY = {
 const featureSchema = z
   .object({
     id: z.uuid(),
-    kind: z.enum(["marker", "line", "route", "polygon", "rectangle", "circle"]),
+    kind: z.enum([
+      "marker",
+      "label",
+      "line",
+      "route",
+      "polygon",
+      "rectangle",
+      "circle",
+    ]),
     name: z.string(),
     sidc: z.string().optional(),
     affiliation: z.enum(["friendly", "hostile", "neutral", "unknown"]).optional(),
@@ -62,6 +72,7 @@ const featureSchema = z
     radiusM: z.number().positive().optional(),
     style: styleSchema,
     remarks: z.string().optional(),
+    showLabel: z.boolean().optional(),
   })
   .superRefine((f, ctx) => {
     // Cross-field invariants the CoT/KML writers enforce with throws — reject

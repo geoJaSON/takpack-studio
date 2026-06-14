@@ -30,16 +30,20 @@ export type Affiliation = "friendly" | "hostile" | "neutral" | "unknown";
 
 export type FeatureKind =
   | "marker"
+  | "label"
   | "line"
   | "route"
   | "polygon"
   | "rectangle"
   | "circle";
 
+export type LineStyle = "solid" | "dashed" | "dotted" | "outlined";
+
 export interface FeatureStyle {
   stroke: string;
   strokeOpacity: number;
   strokeWidth: number;
+  lineStyle?: LineStyle;
   fill?: string;
   fillOpacity?: number;
 }
@@ -54,6 +58,7 @@ export interface MapFeature {
   radiusM?: number;
   style: FeatureStyle;
   remarks?: string;
+  showLabel?: boolean;
 }
 
 export type SourceCategory = "free" | "api";
@@ -143,6 +148,7 @@ export interface JobRecord {
 export type ToolType =
   | "select"
   | "marker"
+  | "label"
   | "line"
   | "route"
   | "polygon"
