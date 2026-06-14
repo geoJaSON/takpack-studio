@@ -15,6 +15,7 @@ import type {
   ImagerySourceDef,
   JobRecord,
   MapFeature,
+  PackageAttachment,
   Position,
 } from "../../types";
 
@@ -24,7 +25,6 @@ import type {
  */
 
 type DialogMode = ImageryExportMode | "none";
-
 function defaultPackageName(): string {
   const d = new Date();
   const ymd = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, "0")}${String(d.getDate()).padStart(2, "0")}`;
@@ -87,6 +87,25 @@ const KIND_LABELS: Record<FeatureKind, string> = {
   rectangle: "rectangle",
   circle: "circle",
 };
+const MAX_ATTACHMENT_BYTES = 6_000_000;
+
+function fileToAttachment(file: File): Promise<PackageAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
+    reader.onload = () => {
+      const value = String(reader.result ?? "");
+      const base64 = value.includes(",") ? value.split(",")[1] : value;
+      resolve({
+        name: file.name,
+        contentType: file.type || undefined,
+        base64,
+      });
+    };
+    reader.readAsDataURL(file);
+  });
+}
+
 
 function featureSummary(features: MapFeature[]): string {
   if (features.length === 0) return "No features";
@@ -104,6 +123,10 @@ export default function ExportDialog() {
   const keys = useAppStore((s) => s.keys);
   const setExportOpen = useAppStore((s) => s.setExportOpen);
   const setActiveJob = useAppStore((s) => s.setActiveJob);
+  const supportDocIds = useAppStore((s) => s.supportDocIds);
+  const commsPlan = useAppStore((s) => s.commsPlan);
+  const includePref = useAppStore((s) => s.includePref);
+  const includeCasevacMarker = useAppStore((s) => s.includeCasevacMarker);
 
   const offlineSources = useMemo(
     () => (config?.sources ?? []).filter((s) => !s.streamOnly),
@@ -127,6 +150,11 @@ export default function ExportDialog() {
   const [planConfirmed, setPlanConfirmed] = useState(false);
   const [mapSourceXmlIds, setMapSourceXmlIds] = useState<string[]>([]);
   const [includeKmlOverlay, setIncludeKmlOverlay] = useState(true);
+  const [includeMissionBrief, setIncludeMissionBrief] = useState(true);
+  const [includeElevation, setIncludeElevation] = useState(false);
+  const [elevationLevel, setElevationLevel] = useState<1 | 2>(1);
+  const [attachments, setAttachments] = useState<PackageAttachment[]>([]);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
 
   // ── job state ──
   const [submitting, setSubmitting] = useState(false);
@@ -211,6 +239,12 @@ export default function ExportDialog() {
 
   const effectiveAoi = aoi ?? aoiFromFeatures(features);
   const lineCount = features.filter((f) => f.kind === "line").length;
+  const elevationCells = effectiveAoi
+    ? (Math.ceil(effectiveAoi.north) - Math.floor(effectiveAoi.south)) *
+      (Math.ceil(effectiveAoi.east) - Math.floor(effectiveAoi.west))
+    : 0;
+  const elevationBytes =
+    elevationCells * (elevationLevel === 2 ? 3601 * 3601 * 2 : 1201 * 1201 * 2);
 
   const canSubmit =
     !submitting &&
@@ -222,12 +256,23 @@ export default function ExportDialog() {
 
   const handleSubmit = async () => {
     if (!effectiveAoi) return;
+    const commsActive =
+      supportDocIds.length > 0 || includePref || includeCasevacMarker;
     const req: ExportRequest = {
       packageName: packageName.trim(),
       aoi: effectiveAoi,
       features,
       mapSourceXmlIds,
       includeKmlOverlay,
+      includeMissionBrief,
+      ...(includeElevation ? { includeElevation: true, elevationLevel } : {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
+      // Server generates the comms/PACE/MEDEVAC cards, config.pref, and CASEVAC
+      // marker from this structured data.
+      ...(supportDocIds.length > 0 ? { supportDocIds } : {}),
+      ...(commsActive ? { commsPlan } : {}),
+      ...(includePref ? { includePref: true } : {}),
+      ...(includeCasevacMarker ? { includeCasevacMarker: true } : {}),
     };
     if (mode !== "none" && aoi && source) {
       req.imagery = {
@@ -256,6 +301,23 @@ export default function ExportDialog() {
     setMapSourceXmlIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     );
+
+  const onAttachmentFiles = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setAttachmentError(null);
+    try {
+      const next: PackageAttachment[] = [];
+      for (const file of Array.from(files)) {
+        if (file.size > MAX_ATTACHMENT_BYTES) {
+          throw new Error(`${file.name} exceeds 6 MB`);
+        }
+        next.push(await fileToAttachment(file));
+      }
+      setAttachments((prev) => [...prev, ...next].slice(0, 12));
+    } catch (err) {
+      setAttachmentError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const percent = Math.max(0, Math.min(100, job?.progress.percent ?? 0));
 
@@ -485,6 +547,84 @@ export default function ExportDialog() {
                   />
                   Include KML overlay of annotations
                 </label>
+                <label
+                  className="panel-row"
+                  style={{ display: "flex", alignItems: "center", gap: 6 }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={includeMissionBrief}
+                    onChange={(e) => setIncludeMissionBrief(e.target.checked)}
+                  />
+                  Include generated mission brief
+                </label>
+                <label
+                  className="panel-row"
+                  style={{ display: "flex", alignItems: "center", gap: 6 }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={includeElevation}
+                    onChange={(e) => setIncludeElevation(e.target.checked)}
+                  />
+                  Bundle elevation (DTED)
+                </label>
+                {includeElevation && (
+                  <>
+                    <div className="panel-row" style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                      <span className="label" style={{ margin: 0 }}>LEVEL</span>
+                      <select
+                        className="select"
+                        value={elevationLevel}
+                        onChange={(e) => setElevationLevel(Number(e.target.value) === 2 ? 2 : 1)}
+                      >
+                        <option value={1}>DTED1 (~90 m)</option>
+                        <option value={2}>DTED2 (~30 m)</option>
+                      </select>
+                    </div>
+                    <div className="warning-text" style={{ opacity: 0.85 }}>
+                      {elevationCells} cell{elevationCells === 1 ? "" : "s"} ≈{" "}
+                      {formatBytes(elevationBytes)}. US-only (USGS 3DEP); enables
+                      ATAK elevation readout, viewshed & LOS.
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="panel-section">
+                <div className="label">ATTACHMENTS</div>
+                <input
+                  className="input"
+                  type="file"
+                  multiple
+                  onChange={(e) => {
+                    void onAttachmentFiles(e.currentTarget.files);
+                    e.currentTarget.value = "";
+                  }}
+                />
+                {attachments.length > 0 && (
+                  <div className="attachment-list">
+                    {attachments.map((attachment, index) => (
+                      <div key={`${attachment.name}-${index}`} className="attachment-row">
+                        <span title={attachment.name}>{attachment.name}</span>
+                        <button
+                          type="button"
+                          className="btn btn-ghost"
+                          onClick={() =>
+                            setAttachments((prev) =>
+                              prev.filter((_, i) => i !== index),
+                            )
+                          }
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {attachmentError && (
+                  <div className="error-text">{attachmentError}</div>
+                )}
               </div>
 
               <div className="panel-section">

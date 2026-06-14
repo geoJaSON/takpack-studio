@@ -13,6 +13,21 @@ export interface ExportRouteDeps {
 // Slightly looser than MAX_MERC_LAT so a UI-snapped 85.06 still validates.
 const MAX_LAT = 85.06;
 const MAX_FEATURES = 2000;
+// Keep MAX_ATTACHMENTS * MAX_ATTACHMENT_BASE64_CHARS under the JSON body limit
+// (app.ts express.json) so a valid request can't be rejected by the body cap.
+const MAX_ATTACHMENTS = 5;
+const MAX_ATTACHMENT_BASE64_CHARS = 8_000_000;
+const MAX_DTED_CELLS = 9;
+const noteIconSchema = z.enum([
+  "pin",
+  "flag",
+  "star",
+  "alert",
+  "info",
+  "camera",
+  "vehicle",
+  "medical",
+]);
 
 // [lon, lat] — bounded so out-of-range coordinates (e.g. from an imported
 // GeoJSON file) are rejected at the boundary instead of failing the job later.
@@ -40,6 +55,7 @@ const styleSchema = z.object({
   lineStyle: z.enum(["solid", "dashed", "dotted", "outlined"]).optional(),
   fill: z.string().optional(),
   fillOpacity: z.number().min(0).max(1).optional(),
+  labelSize: z.number().min(8).max(48).optional(),
 });
 
 /** Geometry type each feature kind requires (mirrors the writer invariants). */
@@ -68,11 +84,23 @@ const featureSchema = z
     name: z.string(),
     sidc: z.string().optional(),
     affiliation: z.enum(["friendly", "hostile", "neutral", "unknown"]).optional(),
+    noteIcon: noteIconSchema.optional(),
     geometry: geometrySchema,
     radiusM: z.number().positive().optional(),
     style: styleSchema,
     remarks: z.string().optional(),
     showLabel: z.boolean().optional(),
+    rangeBearing: z.boolean().optional(),
+    attachments: z
+      .array(
+        z.object({
+          name: z.string().min(1).max(160),
+          contentType: z.string().max(120).optional(),
+          base64: z.string().min(1).max(MAX_ATTACHMENT_BASE64_CHARS),
+        }),
+      )
+      .max(4)
+      .optional(),
   })
   .superRefine((f, ctx) => {
     // Cross-field invariants the CoT/KML writers enforce with throws — reject
@@ -91,6 +119,27 @@ const featureSchema = z
         path: ["radiusM"],
         message: "radiusM is required for circle features",
       });
+    }
+    if (f.noteIcon !== undefined && f.kind !== "marker") {
+      ctx.addIssue({
+        code: "custom",
+        path: ["noteIcon"],
+        message: "noteIcon is only valid for marker features",
+      });
+    }
+    if (f.rangeBearing) {
+      // u-rb-a is a single anchor→endpoint arrow; only a 2-point line maps to it.
+      const twoPointLine =
+        f.kind === "line" &&
+        f.geometry.type === "LineString" &&
+        f.geometry.coordinates.length === 2;
+      if (!twoPointLine) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["rangeBearing"],
+          message: "rangeBearing requires a 2-point line feature",
+        });
+      }
     }
   });
 
@@ -135,6 +184,57 @@ const imagerySchema = z
     }
   });
 
+const attachmentSchema = z.object({
+  name: z.string().min(1).max(160),
+  contentType: z.string().max(120).optional(),
+  base64: z.string().min(1).max(MAX_ATTACHMENT_BASE64_CHARS),
+});
+
+// ── comms plan ──
+const commsNetSchema = z.object({
+  name: z.string().max(120).default(""),
+  frequency: z.string().max(120).default(""),
+  callsign: z.string().max(120).default(""),
+  notes: z.string().max(400).optional(),
+});
+const pacePlanSchema = z.object({
+  primary: z.string().max(400).default(""),
+  alternate: z.string().max(400).default(""),
+  contingency: z.string().max(400).default(""),
+  emergency: z.string().max(400).default(""),
+});
+const commsIdentitySchema = z.object({
+  callsign: z.string().max(60).optional(),
+  team: z.string().max(40).optional(),
+  role: z.string().max(40).optional(),
+  serverHost: z.string().max(255).optional(),
+  serverPort: z.string().max(10).optional(),
+  serverProto: z.enum(["ssl", "tcp"]).optional(),
+  serverName: z.string().max(120).optional(),
+});
+const medevacSchema = z.object({
+  location: z.string().max(200).optional(),
+  freq: z.string().max(120).optional(),
+  callsign: z.string().max(120).optional(),
+  precedence: z.string().max(200).optional(),
+  equipment: z.string().max(200).optional(),
+  patientType: z.string().max(200).optional(),
+  security: z.string().max(200).optional(),
+  marking: z.string().max(200).optional(),
+  nationality: z.string().max(200).optional(),
+  terrain: z.string().max(300).optional(),
+  lat: z.number().min(-90).max(90).optional(),
+  lon: z.number().min(-180).max(180).optional(),
+});
+const commsPlanSchema = z.object({
+  nets: z.array(commsNetSchema).max(20).optional(),
+  pace: pacePlanSchema.optional(),
+  identity: commsIdentitySchema.optional(),
+  medevac: medevacSchema.optional(),
+  notes: z.string().max(2000).optional(),
+});
+const supportDocIdSchema = z.enum(["comms", "pace", "medevac", "checklist"]);
+
 const exportRequestSchema = z.object({
   packageName: z.string().min(1).max(64),
   aoi: aoiSchema,
@@ -160,7 +260,33 @@ const exportRequestSchema = z.object({
   mapSourceXmlIds: z.array(z.string()).default([]),
   includeKeyInXml: z.boolean().optional(),
   includeKmlOverlay: z.boolean().optional(),
-});
+  attachments: z.array(attachmentSchema).max(MAX_ATTACHMENTS).optional(),
+  includeMissionBrief: z.boolean().optional(),
+  commsPlan: commsPlanSchema.optional(),
+  supportDocIds: z.array(supportDocIdSchema).max(8).optional(),
+  includePref: z.boolean().optional(),
+  includeCasevacMarker: z.boolean().optional(),
+  includeElevation: z.boolean().optional(),
+  elevationLevel: z.union([z.literal(1), z.literal(2)]).optional(),
+})
+  .superRefine((req, ctx) => {
+    if (!req.includeElevation) return;
+    // One 1°×1° DTED cell per integer-degree square; cap so a package can't
+    // balloon (DTED2 cell ≈ 26MB).
+    let cells = 0;
+    for (let lat = Math.floor(req.aoi.south); lat < Math.ceil(req.aoi.north); lat++) {
+      for (let lon = Math.floor(req.aoi.west); lon < Math.ceil(req.aoi.east); lon++) {
+        cells++;
+      }
+    }
+    if (cells > MAX_DTED_CELLS) {
+      ctx.addIssue({
+        code: "custom",
+        path: ["includeElevation"],
+        message: `elevation AOI spans ${cells} DTED cells (max ${MAX_DTED_CELLS}) — shrink the AOI`,
+      });
+    }
+  });
 
 function formatIssues(error: z.ZodError): string {
   return error.issues

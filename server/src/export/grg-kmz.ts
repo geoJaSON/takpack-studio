@@ -58,3 +58,31 @@ export async function buildGrgKmz(opts: GrgKmzOptions): Promise<void> {
     void archive.finalize();
   });
 }
+
+/**
+ * KMZ overlay: doc.kml + embedded `files/*` (e.g. note-icon PNGs) so relative
+ * hrefs in the KML resolve offline on the device. `docKml` must reference the
+ * files by `files/<name>`.
+ */
+export async function buildOverlayKmz(
+  filePath: string,
+  docKml: string,
+  files: { name: string; content: Buffer }[],
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const out = createWriteStream(filePath);
+    const archive = archiver("zip", { zlib: { level: 6 } });
+    const fail = (err: unknown) => {
+      archive.destroy();
+      out.destroy();
+      reject(err);
+    };
+    out.on("close", resolve);
+    out.on("error", fail);
+    archive.on("error", fail);
+    archive.pipe(out);
+    archive.append(docKml, { name: "doc.kml" });
+    for (const f of files) archive.append(f.content, { name: `files/${f.name}` });
+    void archive.finalize();
+  });
+}

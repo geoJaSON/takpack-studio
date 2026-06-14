@@ -67,6 +67,7 @@ describe("buildKmlDocument", () => {
       <description>Main &lt;CP&gt;</description>
       <Style>
         <IconStyle><color>ff0000ff</color><scale>1.1</scale></IconStyle>
+        <LabelStyle><color>00000000</color><scale>0</scale></LabelStyle>
       </Style>
       <Point><coordinates>-117.25,34.5,0</coordinates></Point>
     </Placemark>
@@ -74,6 +75,7 @@ describe("buildKmlDocument", () => {
       <name>Phase Line</name>
       <Style>
         <LineStyle><color>8000ff00</color><width>3</width></LineStyle>
+        <LabelStyle><color>8000ff00</color><scale>0.85</scale></LabelStyle>
       </Style>
       <LineString><tessellate>1</tessellate><coordinates>-117,34,0 -116.5,34.2,0</coordinates></LineString>
     </Placemark>
@@ -82,6 +84,7 @@ describe("buildKmlDocument", () => {
       <Style>
         <LineStyle><color>ffff0000</color><width>2</width></LineStyle>
         <PolyStyle><color>40ff0000</color></PolyStyle>
+        <LabelStyle><color>ffff0000</color><scale>0.85</scale></LabelStyle>
       </Style>
       <Polygon>
         <outerBoundaryIs><LinearRing><coordinates>-117,34,0 -117,35,0 -116,35,0 -117,34,0</coordinates></LinearRing></outerBoundaryIs>

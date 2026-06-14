@@ -208,6 +208,27 @@ textarea {
   white-space: nowrap;
 }
 
+.coord-entry {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.coord-entry .mgrs-readout {
+  height: 28px;
+}
+
+.coord-entry .mgrs-readout.invalid {
+  border-color: var(--red);
+  box-shadow: 0 0 0 1px rgba(255, 85, 119, 0.28);
+}
+
+.coord-btn {
+  height: 28px;
+  padding: 4px 8px;
+  font-size: 0.68rem;
+}
+
 /* ───────────────────────────── buttons ───────────────────────────── */
 
 .btn {
@@ -282,6 +303,76 @@ textarea {
 .export-btn {
   padding: 8px 20px;
   clip-path: polygon(0 0, calc(100% - 10px) 0, 100% 10px, 100% 100%, 0 100%);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* loaded-project / save feedback toast under the header */
+.project-toast {
+  position: absolute;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 1500;
+  max-width: 70%;
+  padding: 8px 16px;
+  border-radius: 3px;
+  font-size: 0.82rem;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  border: 1px solid var(--line-1);
+  background: var(--bg-2);
+  color: var(--text-0);
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.6);
+}
+
+.project-toast-ok {
+  border-color: var(--green);
+  color: var(--green);
+}
+
+.project-toast-warn {
+  border-color: var(--amber);
+  color: var(--amber-bright);
+}
+
+.project-toast-error {
+  border-color: var(--red);
+  background: var(--red-dim);
+  color: var(--red);
+}
+
+/* help dialog prose */
+.help-text {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  color: var(--text-0);
+}
+
+.help-list {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  color: var(--text-1);
+}
+
+.help-text code,
+.help-list code {
+  padding: 1px 5px;
+  border-radius: 2px;
+  background: var(--bg-0);
+  border: 1px solid var(--line-0);
+  color: var(--amber-bright);
+  font-size: 0.8em;
 }
 
 /* ───────────────────────────── body layout ───────────────────────────── */
@@ -548,6 +639,407 @@ textarea {
   border-left-color: var(--amber);
 }
 
+.feature-kind-glyph {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  color: var(--amber);
+  flex-shrink: 0;
+}
+
+.toolbox-shell {
+  position: fixed;
+  top: 62px;
+  left: calc(300px + (100vw - 620px) / 2);
+  transform: translateX(-50%);
+  z-index: 1120;
+  width: min(720px, calc(100vw - 660px));
+  min-width: 360px;
+  padding: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 170, 0, 0.04), transparent 34px),
+    rgba(13, 16, 12, 0.94);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--line-1);
+  border-top: 2px solid rgba(255, 170, 0, 0.65);
+  border-radius: 4px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.55);
+}
+
+.toolbox-toolbar {
+  display: grid;
+  grid-template-columns: repeat(12, minmax(48px, 1fr));
+  gap: 4px;
+}
+
+.toolbox-tab {
+  min-width: 0;
+  height: 32px;
+  padding: 0 5px;
+  font-family: var(--font-mono);
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--text-1);
+  background: var(--bg-deep);
+  border: 1px solid var(--line-1);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, color 120ms ease,
+    box-shadow 120ms ease;
+}
+
+.toolbox-tab:hover {
+  color: var(--text-0);
+  border-color: var(--line-2);
+  background: var(--bg-1);
+}
+
+.toolbox-tab.active {
+  color: var(--amber);
+  background: var(--amber-dim);
+  border-color: rgba(255, 170, 0, 0.55);
+  box-shadow: inset 0 0 10px rgba(255, 170, 0, 0.1);
+}
+
+.toolbox-popover {
+  max-height: min(58vh, 520px);
+  /* Scroll vertically (clip only horizontally) — a bare `overflow: hidden`
+     here would override overflow-y and clip tall content (e.g. comms nets
+     pushing PACE/identity out of sight) instead of letting it scroll. */
+  overflow-y: auto;
+  overflow-x: hidden;
+  margin-top: 7px;
+  background: rgba(10, 12, 10, 0.58);
+  border: 1px solid var(--line-1);
+  border-top-color: rgba(255, 170, 0, 0.45);
+  border-radius: 3px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
+}
+
+.toolbox-popover-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  color: var(--amber);
+  background: linear-gradient(180deg, var(--bg-3), var(--bg-2));
+  border-bottom: 1px solid var(--line-0);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.toolbox-popover-header .btn {
+  padding: 3px 7px;
+  font-size: 0.62rem;
+}
+
+.toolbox-popover .panel-section {
+  border-top: 0;
+  padding: 10px;
+}
+
+@media (max-width: 1100px) {
+  .toolbox-shell {
+    left: 50%;
+    width: calc(100vw - 32px);
+    min-width: 0;
+  }
+
+  .toolbox-toolbar {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+.toolbox-symbol-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.template-pack-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.template-pack-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 72px;
+  padding: 8px;
+  color: var(--text-0);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.04), transparent),
+    var(--bg-deep);
+  border: 1px solid var(--line-1);
+  border-left: 3px solid var(--pack-color, var(--amber));
+  border-radius: var(--radius);
+  text-align: left;
+  cursor: pointer;
+}
+
+.template-pack-card:hover {
+  border-color: var(--pack-color, var(--amber));
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.template-pack-card strong {
+  color: var(--pack-color, var(--amber));
+  font-size: 0.82rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.template-pack-card span {
+  color: var(--text-1);
+  font-size: 0.76rem;
+  line-height: 1.25;
+}
+
+.coord-tool-readout {
+  display: grid;
+  gap: 4px;
+}
+
+.coord-tool-readout div {
+  display: grid;
+  grid-template-columns: 72px 1fr;
+  gap: 6px;
+  padding: 5px 6px;
+  font-family: var(--font-mono);
+  font-size: 0.66rem;
+  background: var(--bg-deep);
+  border: 1px solid var(--line-0);
+  border-radius: var(--radius);
+}
+
+.coord-tool-readout strong {
+  color: var(--cyan);
+}
+
+.coord-tool-readout span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-0);
+}
+
+.coord-project-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.coord-project-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-1);
+}
+
+.coord-tool-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ring-divider {
+  height: 1px;
+  background: var(--line-0);
+  margin: 2px 0;
+}
+
+.support-doc-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.support-doc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-height: 76px;
+  padding: 8px;
+  color: var(--text-0);
+  background: var(--bg-deep);
+  border: 1px solid var(--line-1);
+  border-radius: var(--radius);
+  text-align: left;
+  cursor: pointer;
+}
+
+.support-doc-card:hover {
+  border-color: var(--line-2);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.support-doc-card.active {
+  border-color: rgba(255, 170, 0, 0.58);
+  background: var(--amber-dim);
+  box-shadow: inset 0 0 10px rgba(255, 170, 0, 0.1);
+}
+
+.support-doc-card strong {
+  color: var(--amber);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.support-doc-card span {
+  color: var(--text-1);
+  font-size: 0.72rem;
+  line-height: 1.25;
+}
+
+.note-icon-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 4px;
+}
+
+.note-icon-grid .tool-btn {
+  width: 100%;
+}
+
+.batch-coordinate-import textarea {
+  min-height: 108px;
+  resize: vertical;
+  line-height: 1.35;
+}
+
+.batch-import-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.batch-import-errors {
+  color: var(--red);
+  border-color: rgba(255, 85, 119, 0.45);
+  background: var(--red-dim);
+}
+
+.batch-error-list {
+  padding: 6px 8px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  line-height: 1.35;
+  color: var(--red);
+  background: rgba(255, 85, 119, 0.08);
+  border: 1px solid rgba(255, 85, 119, 0.25);
+  border-radius: var(--radius);
+}
+
+.grg-controls {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.grg-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-1);
+}
+
+.grg-controls label:last-child {
+  grid-column: 1 / -1;
+}
+
+.route-speed-control {
+  display: grid;
+  grid-template-columns: 1fr 82px;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-1);
+}
+
+.route-card-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.route-card-summary span {
+  padding: 5px 6px;
+  font-family: var(--font-mono);
+  font-size: 0.68rem;
+  text-align: center;
+  color: var(--cyan);
+  background: var(--bg-deep);
+  border: 1px solid var(--line-1);
+  border-radius: var(--radius);
+}
+
+.route-leg-list {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.route-leg-row {
+  display: grid;
+  grid-template-columns: 1.2fr 0.9fr 0.8fr 0.8fr;
+  gap: 5px;
+  align-items: center;
+  padding: 5px 6px;
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  color: var(--text-1);
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line-0);
+  border-radius: var(--radius);
+}
+
+.route-leg-row strong {
+  color: var(--text-0);
+  font-weight: 600;
+}
+
+.sector-controls {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+
+.sector-controls label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-1);
+}
+
+.sector-controls label:last-child {
+  grid-column: 1 / -1;
+}
+
 /* ───────────────────────────── messaging ───────────────────────────── */
 
 .warning-text {
@@ -669,6 +1161,37 @@ textarea {
   background: var(--bg-2);
 }
 
+.attachment-list {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.attachment-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid var(--line-0);
+  border-radius: var(--radius);
+}
+
+.attachment-row span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+}
+
+.attachment-row .btn {
+  padding: 4px 7px;
+  font-size: 0.66rem;
+}
+
 /* ───────────────────────────── map toolbar ───────────────────────────── */
 
 .toolbar-floating {
@@ -719,6 +1242,87 @@ textarea {
   border-color: rgba(255, 170, 0, 0.55);
   color: var(--amber);
   box-shadow: inset 0 0 10px rgba(255, 170, 0, 0.12);
+}
+
+.measure-entry {
+  display: inline-flex;
+  align-items: end;
+  gap: 5px;
+  padding-left: 5px;
+  border-left: 1px solid var(--line-1);
+}
+
+.measure-entry label {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 2px;
+  font-family: var(--font-mono);
+  font-size: 0.58rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-1);
+}
+
+.measure-entry input {
+  width: 74px;
+  height: 28px;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-0);
+  background: var(--bg-deep);
+  border: 1px solid var(--line-1);
+  border-radius: var(--radius);
+  padding: 3px 6px;
+}
+
+.measure-entry .btn {
+  height: 28px;
+  padding: 4px 9px;
+  font-size: 0.68rem;
+}
+
+.map-context-menu {
+  position: absolute;
+  z-index: 1300;
+  min-width: 178px;
+  padding: 5px;
+  background: rgba(13, 16, 12, 0.96);
+  border: 1px solid var(--line-1);
+  border-top-color: rgba(255, 170, 0, 0.55);
+  border-radius: 4px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.65);
+  transform: translate(4px, 4px);
+}
+
+.map-context-title {
+  padding: 5px 7px 6px;
+  font-family: var(--font-mono);
+  font-size: 0.64rem;
+  color: var(--cyan);
+  border-bottom: 1px solid var(--line-0);
+  margin-bottom: 4px;
+}
+
+.map-context-menu button {
+  display: block;
+  width: 100%;
+  padding: 6px 8px;
+  font-family: var(--font-display);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-align: left;
+  text-transform: uppercase;
+  color: var(--text-0);
+  background: transparent;
+  border: 0;
+  border-radius: var(--radius);
+  cursor: pointer;
+}
+
+.map-context-menu button:hover {
+  color: var(--amber);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 /* ───────────────────────────── leaflet skin ───────────────────────────── */
@@ -793,7 +1397,8 @@ textarea {
 
 /* milsymbol DivIcons must not get the default leaflet white box */
 .milsymbol-icon,
-.mil-symbol-icon {
+.mil-symbol-icon,
+.map-note-icon {
   background: none !important;
   border: none !important;
 }
@@ -832,4 +1437,47 @@ textarea {
   outline: 1px solid var(--amber);
   background: rgba(255, 170, 0, 0.18);
   padding: 0 2px;
+}
+
+.feature-edit-handle {
+  width: 18px !important;
+  height: 18px !important;
+  margin: 0 !important;
+  background: none !important;
+  border: none !important;
+}
+
+.feature-edit-handle span {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  margin: 2px;
+  color: #080a07;
+  background: var(--amber);
+  border: 2px solid #10140d;
+  border-radius: 999px;
+  box-shadow: 0 1px 5px rgba(0, 0, 0, 0.75);
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: grab;
+}
+
+.feature-edit-handle.move span {
+  background: #00e5ff;
+}
+
+.feature-edit-handle.resize span {
+  background: #ff5577;
+  border-radius: 3px;
+}
+
+.feature-edit-handle.rotate span {
+  background: #facc15;
+  border-radius: 4px;
+}
+
+.feature-edit-handle.vertex span {
+  background: #ffffff;
 }

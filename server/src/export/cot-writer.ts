@@ -1,11 +1,15 @@
+import { randomUUID } from "node:crypto";
 import type {
   Affiliation,
   CotFile,
   MapFeature,
+  Medevac9Line,
   Position,
   WriterDeterminism,
 } from "../types.js";
 import { argbColor, esc, fmtCoord } from "./xml.js";
+import { medevacLines } from "./comms-docs.js";
+import { noteUsericonPath } from "./iconset.js";
 
 /** Area-fill alpha when a fill color is set but opacity was left undefined. */
 const DEFAULT_FILL_OPACITY = 0.25;
@@ -45,6 +49,41 @@ const AFFILIATION_TYPE: Record<Affiliation, string> = {
   neutral: "a-n-G",
   unknown: "a-u-G",
 };
+
+const EARTH_RADIUS_M = 6371008.8;
+const toRad = (deg: number): number => (deg * Math.PI) / 180;
+const toDeg = (rad: number): number => (rad * 180) / Math.PI;
+
+/** Great-circle distance in meters between two [lon,lat] points (haversine). */
+function haversineMeters(a: Position, b: Position): number {
+  const dLat = toRad(b[1] - a[1]);
+  const dLon = toRad(b[0] - a[0]);
+  const lat1 = toRad(a[1]);
+  const lat2 = toRad(b[1]);
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.min(1, Math.sqrt(h)));
+}
+
+/** Initial true bearing a→b in degrees, normalized to [0,360). */
+function initialBearingDeg(a: Position, b: Position): number {
+  const lat1 = toRad(a[1]);
+  const lat2 = toRad(b[1]);
+  const dLon = toRad(b[0] - a[0]);
+  const y = Math.sin(dLon) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  return (toDeg(Math.atan2(y, x)) + 360) % 360;
+}
+
+/** Signed 32-bit ARGB int (ATAK <color value="…"> form) from "#rrggbb". */
+function argbInt(hex: string): number {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex.trim());
+  const rgb = m ? parseInt(m[1], 16) : 0xffffff;
+  return (0xff000000 | rgb) | 0; // | 0 → signed (e.g. white → -1)
+}
 
 function isoPlusOneYear(d: Date): string {
   const stale = new Date(d.getTime());
@@ -136,6 +175,11 @@ function labelsLine(f: MapFeature): string {
   return `    <labels_on value="${f.showLabel === false ? "false" : "true"}"/>`;
 }
 
+function markerColorLine(f: MapFeature): string {
+  const color = argbColor(f.style.stroke, f.style.strokeOpacity);
+  return `    <color argb="${color}" value="${color}"/>`;
+}
+
 function eventXml(
   f: MapFeature,
   type: string,
@@ -143,11 +187,12 @@ function eventXml(
   time: string,
   stale: string,
   detailLines: string[],
+  how = "h-g-i-g-o",
 ): string {
   const [lon, lat] = point;
   return [
     '<?xml version="1.0" encoding="UTF-8"?>',
-    `<event version="2.0" uid="${esc(f.id)}" type="${esc(type)}" how="h-g-i-g-o" time="${time}" start="${time}" stale="${stale}">`,
+    `<event version="2.0" uid="${esc(f.id)}" type="${esc(type)}" how="${esc(how)}" time="${time}" start="${time}" stale="${stale}">`,
     `  <point lat="${fmtCoord(lat)}" lon="${fmtCoord(lon)}" hae="9999999.0" ce="9999999.0" le="9999999.0"/>`,
     "  <detail>",
     `    <contact callsign="${esc(f.name)}"/>`,
@@ -180,9 +225,14 @@ export function buildCotEvents(
         const type = f.sidc
           ? sidcToCotType(f.sidc)
           : AFFILIATION_TYPE[f.affiliation ?? "unknown"];
-        const detail = [
-          `    <color argb="${argbColor(f.style.stroke, f.style.strokeOpacity)}"/>`,
-        ];
+        const detail = [markerColorLine(f)];
+        // Note-icon markers reference the bundled iconset so the chosen glyph
+        // shows on the native (editable) marker instead of a generic icon.
+        if (f.noteIcon) {
+          detail.push(
+            `    <usericon iconsetpath="${esc(noteUsericonPath(f.noteIcon))}"/>`,
+          );
+        }
         // Marker labels show by default; <hideLabel/> suppresses the callsign.
         if (f.showLabel === false) detail.push("    <hideLabel/>");
         out.push({ uid: f.id, xml: eventXml(f, type, point, time, stale, detail) });
@@ -194,9 +244,7 @@ export function buildCotEvents(
         // a marker's callsign as the on-map label by default (there is no
         // icon-less label CoT — the KML overlay carries the clean text version).
         const point = requirePoint(f);
-        const detail = [
-          `    <color argb="${argbColor(f.style.stroke, f.style.strokeOpacity)}"/>`,
-        ];
+        const detail = [markerColorLine(f)];
         out.push({
           uid: f.id,
           xml: eventXml(f, "b-m-p-s-m", point, time, stale, detail),
@@ -225,8 +273,33 @@ export function buildCotEvents(
       }
 
       case "line": {
+        // Range & Bearing: a 2-point line flagged rangeBearing exports as a
+        // native u-rb-a arrow. Endpoints aren't separate markers, so (matching
+        // ATAK's own serializer) anchorUID/rangeUID are omitted and ATAK rebuilds
+        // the endpoints from point + range + bearing on import.
+        const line = requireLine(f);
+        if (f.rangeBearing && line.length === 2) {
+          const [anchor, end] = line;
+          const range = haversineMeters(anchor, end);
+          const bearing = initialBearingDeg(anchor, end);
+          const detail = [
+            `    <range value="${range.toFixed(4)}"/>`,
+            `    <bearing value="${bearing.toFixed(4)}"/>`,
+            '    <inclination value="0.0"/>',
+            '    <rangeUnits value="1"/>',
+            '    <bearingUnits value="0"/>',
+            '    <northRef value="0"/>',
+            `    <color value="${argbInt(f.style.stroke)}"/>`,
+            ...(f.showLabel === false ? [] : [labelsLine(f)]),
+          ];
+          out.push({
+            uid: f.id,
+            xml: eventXml(f, "u-rb-a", anchor, time, stale, detail, "h-e"),
+          });
+          break;
+        }
         // OPEN u-d-f polyline: distinct vertices (first != last), no fill.
-        const verts = openRing(requireLine(f));
+        const verts = openRing(line);
         const detail = [
           ...verts.map(
             ([lon, lat]) =>
@@ -282,4 +355,53 @@ export function buildCotEvents(
     }
   }
   return out;
+}
+
+/** Formatted 9-line text for the CASEVAC marker remarks / medline_remarks. */
+function medevacRemarks(m: Medevac9Line): string {
+  return medevacLines(m)
+    .filter((l) => l.value.trim())
+    .map((l) => `${l.label}: ${l.value}`)
+    .join("\n");
+}
+
+/**
+ * Build a CASEVAC 9-line CoT marker (type b-r-f-h-c) carrying a `<_medevac_>`
+ * detail so ATAK recognizes it as a CASEVAC. freq + callsign + location
+ * pre-fill; the full 9 lines also travel in remarks/medline_remarks so they
+ * are readable even if a field name differs across ATAK versions.
+ */
+export function buildCasevacEvent(
+  medevac: Medevac9Line,
+  fallbackCenter: { lat: number; lon: number },
+  determinism?: WriterDeterminism,
+): CotFile {
+  const now = determinism?.now ? determinism.now() : new Date();
+  const uid = (determinism?.uuid ?? randomUUID)();
+  const time = now.toISOString();
+  const stale = isoPlusOneYear(now);
+  const lat = typeof medevac.lat === "number" ? medevac.lat : fallbackCenter.lat;
+  const lon = typeof medevac.lon === "number" ? medevac.lon : fallbackCenter.lon;
+  const callsign = medevac.callsign?.trim() || "CASEVAC";
+  const remarks = medevacRemarks(medevac);
+  const medAttrs = [
+    'casevac="true"',
+    `title="${esc(callsign)}"`,
+    ...(medevac.freq?.trim() ? [`freq="${esc(medevac.freq.trim())}"`] : []),
+    ...(remarks ? [`medline_remarks="${esc(remarks)}"`] : []),
+  ].join(" ");
+  const xml = [
+    '<?xml version="1.0" encoding="UTF-8"?>',
+    `<event version="2.0" uid="${esc(uid)}" type="b-r-f-h-c" how="h-g-i-g-o" time="${time}" start="${time}" stale="${stale}">`,
+    `  <point lat="${fmtCoord(lat)}" lon="${fmtCoord(lon)}" hae="9999999.0" ce="9999999.0" le="9999999.0"/>`,
+    "  <detail>",
+    `    <contact callsign="${esc(callsign)}"/>`,
+    `    <remarks>${esc(remarks)}</remarks>`,
+    "    <archive/>",
+    `    <_medevac_ ${medAttrs}/>`,
+    "  </detail>",
+    "</event>",
+    "",
+  ].join("\n");
+  return { uid, xml };
 }

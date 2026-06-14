@@ -36,6 +36,16 @@ export type Geometry = PointGeometry | LineStringGeometry | PolygonGeometry;
 
 export type Affiliation = "friendly" | "hostile" | "neutral" | "unknown";
 
+export type NoteIconType =
+  | "pin"
+  | "flag"
+  | "star"
+  | "alert"
+  | "info"
+  | "camera"
+  | "vehicle"
+  | "medical";
+
 /**
  * marker    — Point, milsymbol SIDC, exports as CoT a-* event
  * label     — Point, text-only label, exports as CoT b-m-p-s-m + KML label
@@ -70,6 +80,8 @@ export interface FeatureStyle {
   fill?: string;
   /** 0..1 */
   fillOpacity?: number;
+  /** Pixel size for rendered labels. */
+  labelSize?: number;
 }
 
 export interface MapFeature {
@@ -81,6 +93,7 @@ export interface MapFeature {
   /** MIL-STD-2525C 15-char SIDC (markers only). */
   sidc?: string;
   affiliation?: Affiliation;
+  noteIcon?: NoteIconType;
   geometry: Geometry;
   /** Circle radius in meters (kind === 'circle' only). */
   radiusM?: number;
@@ -88,6 +101,11 @@ export interface MapFeature {
   remarks?: string;
   /** Show the feature's name as an on-map label (default true). */
   showLabel?: boolean;
+  /** Export a 2-point line as a native ATAK Range & Bearing arrow (u-rb-a). */
+  rangeBearing?: boolean;
+  /** Files attached to THIS feature's marker (photos/PDFs) — ATAK shows them
+   *  in the marker's attachments. */
+  attachments?: PackageAttachment[];
 }
 
 // ───────────────────────────── Imagery catalog ─────────────────────────────
@@ -163,6 +181,67 @@ export interface ImageryExportSpec {
   planConfirmed?: boolean;
 }
 
+export interface PackageAttachment {
+  name: string;
+  contentType?: string;
+  base64: string;
+}
+
+/** Generated reference cards that can be bundled in the package. */
+export type SupportDocId = "comms" | "pace" | "medevac" | "checklist";
+
+export interface CommsNet {
+  name: string;
+  frequency: string;
+  callsign: string;
+  notes?: string;
+}
+
+export interface PacePlan {
+  primary: string;
+  alternate: string;
+  contingency: string;
+  emergency: string;
+}
+
+/** Identity/server settings emitted as an ATAK config.pref (applied on import). */
+export interface CommsIdentity {
+  callsign?: string;
+  /** ATAK team color, e.g. "Cyan", "Dark Blue". */
+  team?: string;
+  /** ATAK role, e.g. "Team Lead", "Medic". */
+  role?: string;
+  serverHost?: string;
+  serverPort?: string;
+  serverProto?: "ssl" | "tcp";
+  serverName?: string;
+}
+
+/** MEDEVAC 9-line — card text and (optionally) a CASEVAC CoT marker. */
+export interface Medevac9Line {
+  location?: string; // line 1
+  freq?: string; // line 2
+  callsign?: string; // line 2
+  precedence?: string; // line 3
+  equipment?: string; // line 4
+  patientType?: string; // line 5
+  security?: string; // line 6
+  marking?: string; // line 7
+  nationality?: string; // line 8
+  terrain?: string; // line 9
+  /** Marker position for the CASEVAC CoT (defaults to AOI center if absent). */
+  lat?: number;
+  lon?: number;
+}
+
+export interface CommsPlan {
+  nets?: CommsNet[];
+  pace?: PacePlan;
+  identity?: CommsIdentity;
+  medevac?: Medevac9Line;
+  notes?: string;
+}
+
 export interface ExportRequest {
   packageName: string;
   aoi: Aoi;
@@ -174,6 +253,22 @@ export interface ExportRequest {
   includeKeyInXml?: boolean;
   /** Also write a styled KML overlay of all features (default true). */
   includeKmlOverlay?: boolean;
+  /** User-selected supporting docs/images included in the data package. */
+  attachments?: PackageAttachment[];
+  /** Generate an HTML package summary as an attachment. */
+  includeMissionBrief?: boolean;
+  /** Structured comms/PACE/identity/MEDEVAC data for generated cards + .pref. */
+  commsPlan?: CommsPlan;
+  /** Which reference cards to generate from commsPlan. */
+  supportDocIds?: SupportDocId[];
+  /** Emit an ATAK config.pref from commsPlan.identity (callsign/team/role/server). */
+  includePref?: boolean;
+  /** Emit a CASEVAC 9-line CoT marker from commsPlan.medevac. */
+  includeCasevacMarker?: boolean;
+  /** Bundle DTED elevation for the AOI (USGS 3DEP, US-only; needs GDAL). */
+  includeElevation?: boolean;
+  /** DTED level: 1 (~90m, ~2.9MB/cell) or 2 (~30m, ~26MB/cell). Default 1. */
+  elevationLevel?: 1 | 2;
 }
 
 // ───────────────────────────── Jobs ─────────────────────────────

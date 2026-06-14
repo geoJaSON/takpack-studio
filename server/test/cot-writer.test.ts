@@ -46,7 +46,7 @@ describe("buildCotEvents", () => {
     <contact callsign="A &amp; B &lt;&quot;test&quot;&gt;"/>
     <remarks>watch &lt;here&gt;</remarks>
     <archive/>
-    <color argb="-65536"/>
+    <color argb="-65536" value="-65536"/>
   </detail>
 </event>
 `;
@@ -222,5 +222,73 @@ describe("buildCotEvents", () => {
     };
     const [file] = buildCotEvents([marker], det);
     expect(file.xml).toContain("<hideLabel/>");
+  });
+
+  it("references the bundled iconset for a note-icon marker", () => {
+    const marker: MapFeature = {
+      id: "99999999-9999-4999-8999-999999999999",
+      kind: "marker",
+      name: "RP",
+      noteIcon: "flag",
+      geometry: { type: "Point", coordinates: [-117, 34] },
+      style: { stroke: "#ffaa00", strokeOpacity: 1, strokeWidth: 2 },
+    };
+    const [file] = buildCotEvents([marker], det);
+    expect(file.xml).toContain(
+      '<usericon iconsetpath="takpack-notes-iconset-0001/Notes/note-flag.png"/>',
+    );
+  });
+
+  it("emits a self-contained u-rb-a arrow for a 2-point Range & Bearing line", () => {
+    const rb: MapFeature = {
+      id: "abababab-abab-4bab-8bab-abababababab",
+      kind: "line",
+      name: "RB1",
+      rangeBearing: true,
+      geometry: {
+        type: "LineString",
+        // 1° of longitude due east at the equator ≈ 111.32 km, bearing 90°.
+        coordinates: [
+          [0, 0],
+          [1, 0],
+        ],
+      },
+      style: { stroke: "#ffffff", strokeOpacity: 1, strokeWidth: 2 },
+    };
+    const [file] = buildCotEvents([rb], det);
+    expect(file.xml).toContain('type="u-rb-a"');
+    expect(file.xml).toContain('how="h-e"');
+    // Anchor is the first point; endpoints are NOT serialized (ATAK rebuilds them).
+    expect(file.xml).toContain('lat="0" lon="0"');
+    expect(file.xml).not.toContain("anchorUID");
+    expect(file.xml).not.toContain("rangeUID");
+    const range = Number(/<range value="([^"]+)"\/>/.exec(file.xml)?.[1]);
+    const bearing = Number(/<bearing value="([^"]+)"\/>/.exec(file.xml)?.[1]);
+    expect(range).toBeGreaterThan(111_000);
+    expect(range).toBeLessThan(112_000);
+    expect(bearing).toBeCloseTo(90, 1);
+    expect(file.xml).toContain('<color value="-1"/>'); // #ffffff → ARGB -1
+    expect(file.xml).toContain('<rangeUnits value="1"/>');
+  });
+
+  it("keeps a 3-point line as a u-d-f polyline even if rangeBearing is set", () => {
+    const line: MapFeature = {
+      id: "cdcdcdcd-cdcd-4dcd-8dcd-cdcdcdcdcdcd",
+      kind: "line",
+      name: "NotRB",
+      rangeBearing: true,
+      geometry: {
+        type: "LineString",
+        coordinates: [
+          [0, 0],
+          [1, 0],
+          [1, 1],
+        ],
+      },
+      style: { stroke: "#00ff00", strokeOpacity: 1, strokeWidth: 2 },
+    };
+    const [file] = buildCotEvents([line], det);
+    expect(file.xml).toContain('type="u-d-f"');
+    expect(file.xml).not.toContain("u-rb-a");
   });
 });

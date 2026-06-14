@@ -28,6 +28,16 @@ export type Geometry = PointGeometry | LineStringGeometry | PolygonGeometry;
 
 export type Affiliation = "friendly" | "hostile" | "neutral" | "unknown";
 
+export type NoteIconType =
+  | "pin"
+  | "flag"
+  | "star"
+  | "alert"
+  | "info"
+  | "camera"
+  | "vehicle"
+  | "medical";
+
 export type FeatureKind =
   | "marker"
   | "label"
@@ -46,6 +56,7 @@ export interface FeatureStyle {
   lineStyle?: LineStyle;
   fill?: string;
   fillOpacity?: number;
+  labelSize?: number;
 }
 
 export interface MapFeature {
@@ -54,11 +65,15 @@ export interface MapFeature {
   name: string;
   sidc?: string;
   affiliation?: Affiliation;
+  noteIcon?: NoteIconType;
   geometry: Geometry;
   radiusM?: number;
   style: FeatureStyle;
   remarks?: string;
   showLabel?: boolean;
+  /** Export a 2-point line as a native ATAK Range & Bearing arrow (u-rb-a). */
+  rangeBearing?: boolean;
+  attachments?: PackageAttachment[];
 }
 
 export type SourceCategory = "free" | "api";
@@ -114,6 +129,71 @@ export interface ImageryExportSpec {
   planConfirmed?: boolean;
 }
 
+export interface PackageAttachment {
+  name: string;
+  contentType?: string;
+  base64: string;
+}
+
+export type SupportDocId = "comms" | "pace" | "medevac" | "checklist";
+
+export interface CommsNet {
+  name: string;
+  frequency: string;
+  callsign: string;
+  notes?: string;
+}
+
+export interface PacePlan {
+  primary: string;
+  alternate: string;
+  contingency: string;
+  emergency: string;
+}
+
+export interface CommsIdentity {
+  callsign?: string;
+  team?: string;
+  role?: string;
+  serverHost?: string;
+  serverPort?: string;
+  serverProto?: "ssl" | "tcp";
+  serverName?: string;
+}
+
+export interface Medevac9Line {
+  location?: string;
+  freq?: string;
+  callsign?: string;
+  precedence?: string;
+  equipment?: string;
+  patientType?: string;
+  security?: string;
+  marking?: string;
+  nationality?: string;
+  terrain?: string;
+  lat?: number;
+  lon?: number;
+}
+
+export interface CommsPlan {
+  nets?: CommsNet[];
+  pace?: PacePlan;
+  identity?: CommsIdentity;
+  medevac?: Medevac9Line;
+  notes?: string;
+}
+
+/** ATAK team colors (locationTeam) and roles (atakRoleType) for the .pref. */
+export const ATAK_TEAMS = [
+  "White", "Yellow", "Orange", "Magenta", "Red", "Maroon", "Purple",
+  "Dark Blue", "Blue", "Cyan", "Teal", "Green", "Dark Green", "Brown",
+] as const;
+export const ATAK_ROLES = [
+  "Team Member", "Team Lead", "HQ", "Sniper", "Medic",
+  "Forward Observer", "RTO", "K9",
+] as const;
+
 export interface ExportRequest {
   packageName: string;
   aoi: Aoi;
@@ -122,6 +202,14 @@ export interface ExportRequest {
   mapSourceXmlIds: string[];
   includeKeyInXml?: boolean;
   includeKmlOverlay?: boolean;
+  attachments?: PackageAttachment[];
+  includeMissionBrief?: boolean;
+  commsPlan?: CommsPlan;
+  supportDocIds?: SupportDocId[];
+  includePref?: boolean;
+  includeCasevacMarker?: boolean;
+  includeElevation?: boolean;
+  elevationLevel?: 1 | 2;
 }
 
 export type JobStatus = "queued" | "running" | "completed" | "failed";
@@ -148,6 +236,7 @@ export interface JobRecord {
 export type ToolType =
   | "select"
   | "marker"
+  | "noteIcon"
   | "label"
   | "line"
   | "route"

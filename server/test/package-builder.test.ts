@@ -230,6 +230,14 @@ describe("buildPackage integration", () => {
       },
       mapSourceXmlIds: ["free-stream"],
       includeKmlOverlay: true,
+      includeMissionBrief: true,
+      attachments: [
+        {
+          name: "brief.txt",
+          contentType: "text/plain",
+          base64: Buffer.from("mission brief").toString("base64"),
+        },
+      ],
     };
 
     output = await buildPackage({
@@ -301,6 +309,15 @@ describe("buildPackage integration", () => {
     expect(xml).toContain("License: Public domain");
   });
 
+  it("keeps standard SIDC markers out of the KML overlay", () => {
+    const entry = zipNames.find((n) => n.endsWith("/overlays.kml"));
+    expect(entry).toBeDefined();
+    const xml = zip.readAsText(entry!);
+    expect(xml).not.toContain("<name>Alpha</name>");
+    expect(xml).not.toContain("<name>Bravo</name>");
+    expect(xml).toContain("<name>Objective Area</name>");
+  });
+
   it("includes a .gpkg that opens as a valid GeoPackage", () => {
     const gpkgEntry = zipNames.find((n) => n.endsWith(".gpkg"));
     expect(gpkgEntry).toBeDefined();
@@ -338,6 +355,26 @@ describe("buildPackage integration", () => {
     const text = zip.readAsText(entry!);
     expect(text).toContain("Test Imagery Provider");
     expect(text).toContain("Public domain");
+  });
+
+  it("includes user attachments in the zip and manifest", () => {
+    const entry = zipNames.find((n) => n.endsWith("/attachments/brief.txt"));
+    expect(entry).toBeDefined();
+    expect(zip.readAsText(entry!)).toBe("mission brief");
+    const manifest = zip.readAsText("MANIFEST/manifest.xml");
+    expect(manifest).toContain("attachments/brief.txt");
+    expect(manifest).toContain('contentType" value="text/plain"');
+  });
+
+  it("includes the generated mission brief", () => {
+    const entry = zipNames.find((n) => n.endsWith("/mission-brief.html"));
+    expect(entry).toBeDefined();
+    const html = zip.readAsText(entry!);
+    expect(html).toContain("Op Anvil Mission Brief");
+    expect(html).toContain("Feature List");
+    const manifest = zip.readAsText("MANIFEST/manifest.xml");
+    expect(manifest).toContain("mission-brief.html");
+    expect(manifest).toContain('contentType" value="text/html"');
   });
 });
 
@@ -595,6 +632,118 @@ describe("buildPackage KML overlay opt-out", () => {
     } finally {
       rmSync(outDir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("buildPackage note iconset + marker attachments + range/bearing", () => {
+  let outDir: string;
+  let zip: AdmZip;
+  let zipNames: string[];
+  let noteMarkerId: string;
+  let rbLineId: string;
+
+  beforeAll(async () => {
+    outDir = mkdtempSync(path.join(os.tmpdir(), "pkg-feat-"));
+    noteMarkerId = randomUUID();
+    rbLineId = randomUUID();
+    const features: MapFeature[] = [
+      {
+        id: noteMarkerId,
+        kind: "marker",
+        name: "RP North",
+        noteIcon: "flag",
+        geometry: { type: "Point", coordinates: [-111.04, 40.22] },
+        style,
+        attachments: [
+          {
+            name: "photo one.jpg",
+            contentType: "image/jpeg",
+            base64: Buffer.from("fake-jpeg-bytes").toString("base64"),
+          },
+        ],
+      },
+      {
+        id: rbLineId,
+        kind: "line",
+        name: "RB to OBJ",
+        rangeBearing: true,
+        geometry: {
+          type: "LineString",
+          coordinates: [
+            [-111.05, 40.2],
+            [-111.0, 40.2],
+          ],
+        },
+        style,
+      },
+    ];
+    const output = await buildPackage({
+      request: {
+        packageName: "Feat Pack",
+        aoi: AOI,
+        features,
+        mapSourceXmlIds: [],
+        includeKmlOverlay: true,
+      },
+      jobId: "job-feat-1",
+      outDir,
+      catalog: CATALOG,
+      adapters: {},
+      limits: LIMITS,
+      onProgress: () => {},
+    });
+    zip = new AdmZip(output.zipPath);
+    zipNames = zip.getEntries().map((e) => e.entryName);
+  });
+
+  afterAll(() => {
+    rmSync(outDir, { recursive: true, force: true });
+  });
+
+  it("bundles an iconset.zip containing iconset.xml + the used note PNG", () => {
+    const entry = zipNames.find((n) => n.endsWith("/iconset.zip"));
+    expect(entry).toBeDefined();
+    const inner = new AdmZip(zip.readFile(entry!)!);
+    const innerNames = inner.getEntries().map((e) => e.entryName);
+    expect(innerNames).toContain("iconset.xml");
+    expect(innerNames).toContain("Notes/note-flag.png");
+    const xml = inner.readAsText("iconset.xml");
+    expect(xml).toContain('uid="takpack-notes-iconset-0001"');
+    expect(xml).toContain('<icon name="note-flag.png"/>');
+    // the PNG decodes as a real image
+    expect(inner.readFile("Notes/note-flag.png")!.length).toBeGreaterThan(50);
+  });
+
+  it("manifests the iconset with an iconset contentType", () => {
+    const manifest = zip.readAsText("MANIFEST/manifest.xml");
+    expect(manifest).toMatch(
+      /<Parameter name="contentType" value="iconset"\s*\/>/,
+    );
+  });
+
+  it("pins the marker photo under the marker uid with a Content uid parameter", () => {
+    const att = zipNames.find((n) => n === `${noteMarkerId}/photo one.jpg`);
+    expect(att).toBeDefined();
+    const manifest = zip.readAsText("MANIFEST/manifest.xml");
+    // The attachment Content carries the owning marker's uid.
+    expect(manifest).toContain(
+      `<Parameter name="uid" value="${noteMarkerId}"/>`,
+    );
+  });
+
+  it("exports the note marker as a CoT with a usericon iconset reference", () => {
+    const cot = zip.readAsText(`${noteMarkerId}/${noteMarkerId}.cot`);
+    expect(cot).toContain(
+      'iconsetpath="takpack-notes-iconset-0001/Notes/note-flag.png"',
+    );
+  });
+
+  it("exports the R&B line as a native u-rb-a and omits it from the KML overlay", () => {
+    const cot = zip.readAsText(`${rbLineId}/${rbLineId}.cot`);
+    expect(cot).toContain('type="u-rb-a"');
+    const overlay = zipNames.find((n) => n.endsWith("/overlays.kml"));
+    // The only non-marker feature was the R&B line, which is CoT-only → no overlay.
+    expect(overlay).toBeUndefined();
   });
 });
 

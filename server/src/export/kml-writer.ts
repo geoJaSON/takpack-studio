@@ -3,6 +3,8 @@ import { esc, fmtCoord, kmlColor } from "./xml.js";
 
 /** Area-fill alpha when a fill color is set but opacity was left undefined. */
 const DEFAULT_FILL_OPACITY = 0.25;
+const DEFAULT_FEATURE_LABEL_SIZE = 11;
+const DEFAULT_TEXT_LABEL_SIZE = 13;
 
 /** Meters per degree of latitude (spherical approximation, per port source). */
 const METERS_PER_DEG_LAT = 111320;
@@ -83,6 +85,28 @@ function polyStyle(f: MapFeature): string {
   return `        <PolyStyle><color>${c}</color></PolyStyle>`;
 }
 
+function labelScale(f: MapFeature): string {
+  if (f.showLabel === false) return "0";
+  const fallback = f.kind === "label" ? DEFAULT_TEXT_LABEL_SIZE : DEFAULT_FEATURE_LABEL_SIZE;
+  const size = Math.max(8, Math.min(48, f.style.labelSize ?? fallback));
+  return (size / DEFAULT_TEXT_LABEL_SIZE).toFixed(2).replace(/\.?0+$/, "");
+}
+
+function labelStyle(f: MapFeature, forceHidden = false): string {
+  if (forceHidden) {
+    return "        <LabelStyle><color>00000000</color><scale>0</scale></LabelStyle>";
+  }
+  const c = kmlColor(f.style.stroke, f.style.strokeOpacity);
+  return `        <LabelStyle><color>${c}</color><scale>${labelScale(f)}</scale></LabelStyle>`;
+}
+
+// Relative href into the overlay KMZ (icons embedded by the package builder),
+// so note glyphs render on a disconnected ATAK device. The IconStyle <color>
+// tints the white glyph PNG.
+function noteIconHref(f: MapFeature): string | null {
+  return f.noteIcon ? `files/note-${f.noteIcon}.png` : null;
+}
+
 function polygonLines(rings: Position[][]): string[] {
   const [exterior, ...holes] = rings;
   const lines = [
@@ -102,8 +126,16 @@ function featureParts(f: MapFeature): { style: string[]; geom: string[] } {
   switch (f.kind) {
     case "marker": {
       const c = kmlColor(f.style.stroke, f.style.strokeOpacity);
+      const href = noteIconHref(f);
       return {
-        style: [`        <IconStyle><color>${c}</color><scale>1.1</scale></IconStyle>`],
+        style: [
+          href
+            ? `        <IconStyle><color>${c}</color><scale>1.1</scale><Icon><href>${esc(href)}</href></Icon></IconStyle>`
+            : `        <IconStyle><color>${c}</color><scale>1.1</scale></IconStyle>`,
+          // ATAK draws KML point labels over point icons. CoT markers already
+          // carry their callsign labels, so keep the visual KML marker clean.
+          labelStyle(f, true),
+        ],
         geom: [
           `      <Point><coordinates>${coordString([requirePoint(f)])}</coordinates></Point>`,
         ],
@@ -113,11 +145,10 @@ function featureParts(f: MapFeature): { style: string[]; geom: string[] } {
       // Label-only: zero-scale icon + empty Icon collapses the marker bitmap
       // (ATAK's OGR style parser drops the SYMBOL when scale is 0), leaving the
       // <name> + LabelStyle rendering as on-map text.
-      const c = kmlColor(f.style.stroke, f.style.strokeOpacity);
       return {
         style: [
           "        <IconStyle><scale>0</scale><Icon></Icon></IconStyle>",
-          `        <LabelStyle><color>${c}</color><scale>1.0</scale></LabelStyle>`,
+          labelStyle(f),
         ],
         geom: [
           `      <Point><coordinates>${coordString([requirePoint(f)])}</coordinates></Point>`,
@@ -127,7 +158,7 @@ function featureParts(f: MapFeature): { style: string[]; geom: string[] } {
     case "line":
     case "route":
       return {
-        style: [lineStyle(f)],
+        style: [lineStyle(f), labelStyle(f)],
         geom: [
           `      <LineString><tessellate>1</tessellate><coordinates>${coordString(requireLine(f))}</coordinates></LineString>`,
         ],
@@ -135,7 +166,7 @@ function featureParts(f: MapFeature): { style: string[]; geom: string[] } {
     case "polygon":
     case "rectangle":
       return {
-        style: [lineStyle(f), polyStyle(f)],
+        style: [lineStyle(f), polyStyle(f), labelStyle(f)],
         geom: polygonLines(requirePolygon(f)),
       };
     case "circle": {
@@ -143,7 +174,7 @@ function featureParts(f: MapFeature): { style: string[]; geom: string[] } {
         throw new Error(`feature ${f.id} (circle): radiusM is required`);
       }
       return {
-        style: [lineStyle(f), polyStyle(f)],
+        style: [lineStyle(f), polyStyle(f), labelStyle(f)],
         geom: polygonLines([circleRing(requirePoint(f), f.radiusM)]),
       };
     }

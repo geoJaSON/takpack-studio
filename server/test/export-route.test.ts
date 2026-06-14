@@ -196,6 +196,46 @@ describe("POST /api/export validation", () => {
     expect(enqueued.length).toBe(before);
   });
 
+  it("accepts a 2-point line flagged rangeBearing", async () => {
+    const before = enqueued.length;
+    const rb = marker({
+      kind: "line",
+      name: "RB",
+      rangeBearing: true,
+      geometry: {
+        type: "LineString",
+        coordinates: [
+          [10, 10],
+          [11, 11],
+        ],
+      },
+    });
+    const { status } = await postExport(baseRequest([rb]));
+    expect(status).toBe(202);
+    expect(enqueued.length).toBe(before + 1);
+  });
+
+  it("rejects rangeBearing on a 3-point line", async () => {
+    const before = enqueued.length;
+    const rb = marker({
+      kind: "line",
+      name: "RB",
+      rangeBearing: true,
+      geometry: {
+        type: "LineString",
+        coordinates: [
+          [10, 10],
+          [11, 11],
+          [12, 12],
+        ],
+      },
+    });
+    const { status, json } = await postExport(baseRequest([rb]));
+    expect(status).toBe(400);
+    expect(json.error).toContain("rangeBearing requires a 2-point line");
+    expect(enqueued.length).toBe(before);
+  });
+
   it("rejects out-of-range coordinates (lon ±180, lat ±90)", async () => {
     for (const coordinates of [
       [200, 10],

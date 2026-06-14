@@ -28,9 +28,21 @@ importfiles/sort/*). What is verified **locally** by the test suite:
 9. Confirm **line styles** (dashed / dotted / outlined) render — needs ATAK
    ≈4.5.1+; older clients fall back to solid.
 10. Confirm the KML overlay renders with matching colors (no red/blue swap).
-11. Confirm map-source XML files appear in the map source list and stream tiles.
-12. KMZ-GRG mode: confirm the GroundOverlay registers at the right location.
-13. Note your ATAK version and any deviations here.
+11. Confirm note-icon markers show their glyph (icons are embedded in
+    overlays.kmz, so they must render offline / disconnected).
+12. Confirm map-source XML files appear in the map source list and stream tiles.
+13. KMZ-GRG mode: confirm the GroundOverlay registers at the right location.
+14. **config.pref**: confirm importing the package sets callsign / team color /
+    role (and the TAK-server entry, if included) — ImportPrefSort applies it
+    silently on local import. Cert paths/passwords are stripped from
+    network-received packages; load locally if you need full server enrollment.
+15. **CASEVAC marker** (`b-r-f-h-c`): confirm it imports as a CASEVAC and opens
+    the 9-line **pre-filled** (the `<_medevac_>` schema). Location, callsign,
+    freq, and the full 9 lines in remarks are reliable; the per-line form
+    pre-fill (counts/enums beyond freq) is the part to verify on device.
+16. Comms / PACE / MEDEVAC cards + mission brief are HTML attachments — confirm
+    they open on the device.
+17. Note your ATAK version and any deviations here.
 
 ## Known unknowns (validate on device, adjust writers if needed)
 

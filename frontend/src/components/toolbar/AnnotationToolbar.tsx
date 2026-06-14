@@ -1,6 +1,7 @@
-import type { ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import { useAppStore } from "../../store/use-app-store";
 import { AFFILIATIONS, applyAffiliation } from "../../lib/milsymbol-utils";
+import { NoteIconGlyph } from "../../lib/note-icons";
 import type { ToolType } from "../../types";
 
 /**
@@ -45,6 +46,11 @@ const TOOLS: { id: ToolType; label: string; glyph: ReactElement }[] = [
       <path key="b" d="M3.5 4.5h11" />,
       <path key="s" d="M9 4.5v10" />,
     ]),
+  },
+  {
+    id: "noteIcon",
+    label: "Note icon",
+    glyph: <NoteIconGlyph iconId="pin" size={16} />,
   },
   {
     id: "line",
@@ -101,6 +107,8 @@ export default function AnnotationToolbar() {
   const setActiveAffiliation = useAppStore((s) => s.setActiveAffiliation);
   const activeSidc = useAppStore((s) => s.activeSidc);
   const setActiveSidc = useAppStore((s) => s.setActiveSidc);
+  const [distanceM, setDistanceM] = useState("100");
+  const [bearingDeg, setBearingDeg] = useState("0");
 
   const drafting = MULTI_POINT_TOOLS.includes(tool) && draftPoints.length > 0;
   const awaitingSecondClick =
@@ -116,6 +124,10 @@ export default function AnnotationToolbar() {
       p[1] !== draftPoints[i - 1][1],
   ).length;
   const minToFinish = tool === "polygon" ? 3 : 2;
+  const canAddMeasuredSegment =
+    ((tool === "line" || tool === "route" || tool === "polygon") &&
+      draftPoints.length > 0) ||
+    (tool === "circle" && draftPoints.length === 1);
 
   const finishDraft = () => {
     // MapCanvas listens and runs the same completion path as Enter/double-click.
@@ -125,6 +137,20 @@ export default function AnnotationToolbar() {
   const cancelDraft = () => {
     clearDraft();
     setTool("select");
+  };
+
+  const addMeasuredSegment = () => {
+    const distance = Number(distanceM);
+    const bearing = Number(bearingDeg);
+    if (!Number.isFinite(distance) || distance <= 0) return;
+    window.dispatchEvent(
+      new CustomEvent("takpack:add-measured-draft", {
+        detail: {
+          distanceM: distance,
+          bearingDeg: Number.isFinite(bearing) ? bearing : 0,
+        },
+      }),
+    );
   };
 
   return (
@@ -208,6 +234,43 @@ export default function AnnotationToolbar() {
             ? "Click the edge to set radius · Esc to cancel"
             : "Click the opposite corner · Esc to cancel"}
         </span>
+      )}
+
+      {canAddMeasuredSegment && (
+        <form
+          className="measure-entry"
+          onSubmit={(e) => {
+            e.preventDefault();
+            addMeasuredSegment();
+          }}
+        >
+          <label>
+            <span>{tool === "circle" ? "Radius m" : "Dist m"}</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={distanceM}
+              onChange={(e) => setDistanceM(e.target.value)}
+            />
+          </label>
+          {tool !== "circle" && (
+            <label>
+              <span>Bearing</span>
+              <input
+                type="number"
+                min={0}
+                max={359.9}
+                step={0.1}
+                value={bearingDeg}
+                onChange={(e) => setBearingDeg(e.target.value)}
+              />
+            </label>
+          )}
+          <button type="submit" className="btn btn-primary">
+            {tool === "circle" ? "Set radius" : "Add segment"}
+          </button>
+        </form>
       )}
     </div>
   );

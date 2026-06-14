@@ -9,21 +9,20 @@ import type {
   SingleImageResult,
 } from "../types.js";
 import {
-  aoiTo3857,
   countTiles,
+  lonLatToTileFloat,
   tileBounds3857,
-  tileBoundsLonLat,
   tileRangeForAoi,
 } from "../export/tile-math.js";
-import { fetchBinary, fetchJson } from "./fetch-util.js";
+import { runBounded, sniffImageFormat } from "./fetch-util.js";
+import { fetchSentinelTile } from "./preview-tiles.js";
 
-const STAC_SEARCH_URL = "https://planetarycomputer.microsoft.com/api/stac/v1/search";
-const CROP_URL_BASE = "https://planetarycomputer.microsoft.com/api/data/v1/item/crop";
-const COLLECTION = "sentinel-2-l2a";
-const MASTER_MAX_PX = 4096;
-const CROP_TIMEOUT_MS = 120_000;
 const TILE_SIZE = 256;
 const JPEG_QUALITY = 80;
+/** PC mosaic tiler is shared/anonymous — keep concurrency gentle. */
+const CONCURRENCY = 6;
+/** DESIGN.md: >60% tile failure ⇒ job failure (mirrors package-builder). */
+const TILE_FAIL_ABORT_RATIO = 0.6;
 
 export interface MercBounds {
   minX: number;
@@ -50,6 +49,8 @@ export function emptyPyramidFailure(
  * are interpolated upsamples. Edge tiles only partially covered by the master
  * are padded (black for jpeg, transparent for png); tiles entirely outside
  * the master are counted failed, never fabricated.
+ *
+ * Still used by the Sentinel Hub adapter (Processing-API master renders).
  */
 export async function sliceMasterToTiles(
   master: Buffer,
@@ -99,17 +100,13 @@ export async function sliceMasterToTiles(
           // tile's true scale, then crop the fractional sub-window from the
           // resized piece. Clamping the enlarged extract straight onto the
           // tile would shift/stretch content by up to 1/scale px whenever the
-          // master crop is downscaled (capped at 2500/4096 px).
+          // master crop is downscaled.
           const scaleX = TILE_SIZE / (fRight - fLeft);
           const scaleY = TILE_SIZE / (fBottom - fTop);
-          // Destination offset within the tile (>0 only for edge tiles whose
-          // window starts before the master, i.e. fLeft<0 / fTop<0).
           const dLeft = Math.max(0, Math.round((cLeft - fLeft) * scaleX));
           const dTop = Math.max(0, Math.round((cTop - fTop) * scaleY));
-          // Resized extract dimensions at the tile's scale.
           const rw = Math.max(1, Math.round((cRight - cLeft) * scaleX));
           const rh = Math.max(1, Math.round((cBottom - cTop) * scaleY));
-          // Sub-window of the resized piece that lies inside the tile.
           const ox = Math.min(rw - 1, Math.max(0, Math.round((fLeft - cLeft) * scaleX)));
           const oy = Math.min(rh - 1, Math.max(0, Math.round((fTop - cTop) * scaleY)));
           const dW = Math.max(1, Math.min(TILE_SIZE - dLeft, rw - ox));
@@ -158,56 +155,20 @@ export async function sliceMasterToTiles(
   return { tiles, fetched: tiles.length, failed, total, warnings };
 }
 
-interface StacSearchResponse {
-  features?: Array<{ id?: string }>;
+interface TileCoord {
+  z: number;
+  x: number;
+  y: number;
 }
 
 /**
- * Planetary Computer Sentinel-2 L2A adapter: STAC search for the lowest-cloud
- * scene in the last 12 months, then titiler bbox crops of its `visual` asset.
- * Native resolution is ~10 m (~z14) — any higher zooms are interpolated.
+ * Planetary Computer Sentinel-2 L2A adapter, backed by the PC **mosaic tiler**
+ * (a low-cloud sentinel-2-l2a `visual` mosaic) rather than a single scene's
+ * crop. This gives full AOI coverage (the previous single-item titiler crop
+ * only covered one ~100 km scene footprint and could not be re-cropped per
+ * tile). Native resolution ~10 m (~z14); higher zooms upscale.
  */
 export class StacSentinel2Adapter implements ImageryAdapter {
-  private async searchLowestCloudItem(
-    aoi: Aoi,
-    signal?: AbortSignal,
-  ): Promise<string | null> {
-    const end = new Date();
-    const start = new Date(end.getTime() - 365 * 24 * 60 * 60 * 1000);
-    const body = JSON.stringify({
-      collections: [COLLECTION],
-      bbox: [aoi.west, aoi.south, aoi.east, aoi.north],
-      datetime: `${start.toISOString()}/${end.toISOString()}`,
-      query: { "eo:cloud_cover": { lt: 30 } },
-      sortby: [{ field: "properties.eo:cloud_cover", direction: "asc" }],
-      limit: 1,
-    });
-    const res = await fetchJson<StacSearchResponse>(STAC_SEARCH_URL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-      timeoutMs: 30_000,
-      signal,
-    });
-    const id = res?.features?.[0]?.id;
-    return typeof id === "string" && id.length > 0 ? id : null;
-  }
-
-  private cropUrl(
-    itemId: string,
-    bbox: Aoi,
-    width: number,
-    height: number,
-    dstCrs?: string,
-  ): string {
-    const coords = `${bbox.west},${bbox.south},${bbox.east},${bbox.north}`;
-    let url =
-      `${CROP_URL_BASE}/${coords}/${width}x${height}.jpg` +
-      `?collection=${COLLECTION}&item=${encodeURIComponent(itemId)}&assets=visual`;
-    if (dstCrs) url += `&dst_crs=${encodeURIComponent(dstCrs)}`;
-    return url;
-  }
-
   async fetchPyramid(
     source: ImagerySourceDef,
     aoi: Aoi,
@@ -216,113 +177,138 @@ export class StacSentinel2Adapter implements ImageryAdapter {
     format: "jpeg" | "png",
     opts: FetchPyramidOptions,
   ): Promise<PyramidResult> {
-    const itemId = await this.searchLowestCloudItem(aoi, opts.signal);
-    if (!itemId) {
-      return emptyPyramidFailure(
-        aoi,
-        minZoom,
-        maxZoom,
-        "Sentinel-2 (Planetary Computer): no low-cloud scene found for the AOI in the last 12 months.",
-      );
+    const coords: TileCoord[] = [];
+    for (let z = minZoom; z <= maxZoom; z++) {
+      const r = tileRangeForAoi(aoi, z);
+      for (let y = r.minY; y <= r.maxY; y++) {
+        for (let x = r.minX; x <= r.maxX; x++) coords.push({ z, x, y });
+      }
     }
+    const total = coords.length;
+    const tiles: PyramidTile[] = [];
+    let done = 0;
+    let failed = 0;
 
-    // One master crop aligned to the maxZoom tile range, sliced per zoom.
-    const r = tileRangeForAoi(aoi, maxZoom);
-    const nwLL = tileBoundsLonLat(maxZoom, r.minX, r.minY);
-    const seLL = tileBoundsLonLat(maxZoom, r.maxX, r.maxY);
-    const cropBbox: Aoi = {
-      west: nwLL.west,
-      north: nwLL.north,
-      east: seLL.east,
-      south: seLL.south,
-    };
-    const fullW = (r.maxX - r.minX + 1) * TILE_SIZE;
-    const fullH = (r.maxY - r.minY + 1) * TILE_SIZE;
-    const scale = Math.min(1, MASTER_MAX_PX / Math.max(fullW, fullH));
-    const width = Math.max(1, Math.round(fullW * scale));
-    const height = Math.max(1, Math.round(fullH * scale));
-
-    // dst_crs=EPSG:3857 keeps master pixel rows aligned with the mercator
-    // tile grid so slicing introduces no latitude distortion.
-    const master = await fetchBinary(
-      this.cropUrl(itemId, cropBbox, width, height, "EPSG:3857"),
-      { timeoutMs: CROP_TIMEOUT_MS, signal: opts.signal },
+    await runBounded(
+      coords.map((c) => async () => {
+        let data = await fetchSentinelTile(c.z, c.x, c.y, opts.signal);
+        if (data) {
+          const sniffed = sniffImageFormat(data);
+          if (!sniffed) {
+            data = null; // non-image body — never package raw bytes
+          } else if (sniffed !== format) {
+            try {
+              data =
+                format === "jpeg"
+                  ? await sharp(data).jpeg({ quality: JPEG_QUALITY }).toBuffer()
+                  : await sharp(data).png().toBuffer();
+            } catch {
+              data = null;
+            }
+          }
+        }
+        if (data) tiles.push({ z: c.z, x: c.x, y: c.y, data });
+        else failed++;
+        done++;
+        opts.onProgress?.(done, total);
+      }),
+      CONCURRENCY,
+      opts.signal,
     );
-    if (!master) {
-      return emptyPyramidFailure(
-        aoi,
-        minZoom,
-        maxZoom,
-        "Sentinel-2 (Planetary Computer): titiler crop request failed.",
-      );
-    }
 
-    const nwTb = tileBounds3857(maxZoom, r.minX, r.minY);
-    const seTb = tileBounds3857(maxZoom, r.maxX, r.maxY);
-    const masterBounds: MercBounds = {
-      minX: nwTb.minX,
-      maxY: nwTb.maxY,
-      maxX: seTb.maxX,
-      minY: seTb.minY,
-    };
     const warnings: string[] = [];
-    if (scale < 1) {
+    if (failed > 0) {
       warnings.push(
-        `Sentinel-2 master crop capped at ${MASTER_MAX_PX}px — highest zoom tiles are interpolated upsamples.`,
+        `${failed}/${total} Sentinel-2 mosaic tiles failed to fetch from the Planetary Computer.`,
       );
     }
-    return sliceMasterToTiles(
-      master,
-      masterBounds,
-      aoi,
-      minZoom,
-      maxZoom,
-      format,
-      opts.onProgress,
-      warnings,
-    );
+    return { tiles, fetched: tiles.length, failed, total, warnings };
   }
 
+  /** Stitch one zoom of the mosaic, cropped to the exact AOI (GRG / preview). */
   async fetchSingleImage(
     source: ImagerySourceDef,
     aoi: Aoi,
     maxPx: number,
     opts: FetchPyramidOptions,
   ): Promise<SingleImageResult | null> {
-    const itemId = await this.searchLowestCloudItem(aoi, opts.signal);
-    if (!itemId) return null;
+    const z = pickStitchZoom(source, aoi, maxPx);
+    const nwF = lonLatToTileFloat(aoi.west, aoi.north, z);
+    const seF = lonLatToTileFloat(aoi.east, aoi.south, z);
+    const minX = Math.floor(nwF.x);
+    const minY = Math.floor(nwF.y);
+    const maxX = Math.floor(seF.x);
+    const maxY = Math.floor(seF.y);
+    const gridW = (maxX - minX + 1) * TILE_SIZE;
+    const gridH = (maxY - minY + 1) * TILE_SIZE;
 
-    // Aspect from mercator extents so pixels are visually square.
-    const m = aoiTo3857(aoi);
-    const wMeters = m.maxX - m.minX;
-    const hMeters = m.maxY - m.minY;
-    if (wMeters <= 0 || hMeters <= 0) return null;
-    const longPx = Math.min(maxPx, MASTER_MAX_PX);
-    let width: number;
-    let height: number;
-    if (wMeters >= hMeters) {
-      width = longPx;
-      height = Math.max(1, Math.round((longPx * hMeters) / wMeters));
-    } else {
-      height = longPx;
-      width = Math.max(1, Math.round((longPx * wMeters) / hMeters));
+    const coords: TileCoord[] = [];
+    for (let y = minY; y <= maxY; y++) {
+      for (let x = minX; x <= maxX; x++) coords.push({ z, x, y });
     }
+    const fetched = await runBounded(
+      coords.map((c) => async () => ({
+        c,
+        buf: await fetchSentinelTile(c.z, c.x, c.y, opts.signal),
+      })),
+      CONCURRENCY,
+      opts.signal,
+    );
+    const ok = fetched.filter(
+      (r): r is { c: TileCoord; buf: Buffer } =>
+        r?.buf != null && sniffImageFormat(r.buf) !== null,
+    );
+    const failed = coords.length - ok.length;
+    if (failed / coords.length > TILE_FAIL_ABORT_RATIO) {
+      throw new Error(
+        `Imagery fetch failed: ${failed}/${coords.length} Sentinel-2 tiles failed`,
+      );
+    }
+    if (ok.length === 0) return null;
+    const warnings =
+      failed > 0
+        ? [`${failed}/${coords.length} Sentinel-2 tiles failed; image has black gaps.`]
+        : [];
 
-    const data = await fetchBinary(this.cropUrl(itemId, aoi, width, height), {
-      timeoutMs: CROP_TIMEOUT_MS,
-      signal: opts.signal,
-    });
-    if (!data) return null;
-    try {
-      const meta = await sharp(data).metadata();
-      return {
-        data,
-        width: meta.width ?? width,
-        height: meta.height ?? height,
-        bounds: { ...aoi },
-      };
-    } catch {
-      return null;
-    }
+    const { data: raw, info } = await sharp({
+      create: { width: gridW, height: gridH, channels: 3, background: { r: 0, g: 0, b: 0 } },
+    })
+      .composite(
+        ok.map(({ c, buf }) => ({
+          input: buf,
+          left: (c.x - minX) * TILE_SIZE,
+          top: (c.y - minY) * TILE_SIZE,
+        })),
+      )
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    const left = Math.max(0, Math.min(Math.round((nwF.x - minX) * TILE_SIZE), gridW - 1));
+    const top = Math.max(0, Math.min(Math.round((nwF.y - minY) * TILE_SIZE), gridH - 1));
+    const width = Math.min(Math.max(1, Math.round((seF.x - nwF.x) * TILE_SIZE)), gridW - left);
+    const height = Math.min(Math.max(1, Math.round((seF.y - nwF.y) * TILE_SIZE)), gridH - top);
+
+    const data = await sharp(raw, {
+      raw: { width: info.width, height: info.height, channels: info.channels },
+    })
+      .extract({ left, top, width, height })
+      .jpeg({ quality: 85 })
+      .toBuffer();
+
+    const result: SingleImageResult = { data, width, height, bounds: { ...aoi } };
+    if (warnings.length > 0) result.warnings = warnings;
+    return result;
   }
+}
+
+/** Highest zoom (within source limits) whose stitched AOI long side ≤ maxPx. */
+function pickStitchZoom(source: ImagerySourceDef, aoi: Aoi, maxPx: number): number {
+  for (let z = source.maxZoom; z > source.minZoom; z--) {
+    const nwF = lonLatToTileFloat(aoi.west, aoi.north, z);
+    const seF = lonLatToTileFloat(aoi.east, aoi.south, z);
+    const wPx = (seF.x - nwF.x) * TILE_SIZE;
+    const hPx = (seF.y - nwF.y) * TILE_SIZE;
+    if (Math.max(wPx, hPx) <= maxPx) return z;
+  }
+  return source.minZoom;
 }

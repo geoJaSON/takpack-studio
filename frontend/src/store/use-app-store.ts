@@ -3,11 +3,15 @@ import type {
   Aoi,
   Affiliation,
   AppConfig,
+  CommsPlan,
   JobRecord,
   MapFeature,
+  NoteIconType,
   Position,
+  SupportDocId,
   ToolType,
 } from "../types";
+import type { ProjectSnapshot } from "../lib/project-file";
 
 /**
  * Single Zustand store for all app state. Components read slices; the
@@ -52,6 +56,8 @@ export interface AppState {
   setActiveSidc: (sidc: string) => void;
   activeAffiliation: Affiliation;
   setActiveAffiliation: (a: Affiliation) => void;
+  activeNoteIcon: NoteIconType;
+  setActiveNoteIcon: (icon: NoteIconType) => void;
 
   // ── API keys (reactive mirror of localStorage takpack_key_*) ──
   keys: Record<string, string>;
@@ -66,6 +72,18 @@ export interface AppState {
   clearFeatures: () => void;
   selectedFeatureId: string | null;
   setSelectedFeatureId: (id: string | null) => void;
+  /** Replace the whole working map from a loaded project file. */
+  loadProject: (snapshot: ProjectSnapshot) => void;
+
+  // ── comms / support pack ──
+  supportDocIds: SupportDocId[];
+  setSupportDocIds: (ids: SupportDocId[]) => void;
+  commsPlan: CommsPlan;
+  setCommsPlan: (patch: Partial<CommsPlan>) => void;
+  includePref: boolean;
+  setIncludePref: (v: boolean) => void;
+  includeCasevacMarker: boolean;
+  setIncludeCasevacMarker: (v: boolean) => void;
 
   // ── export ──
   exportOpen: boolean;
@@ -136,6 +154,8 @@ export const useAppStore = create<AppState>((set) => ({
   setActiveSidc: (activeSidc) => set({ activeSidc }),
   activeAffiliation: "friendly",
   setActiveAffiliation: (activeAffiliation) => set({ activeAffiliation }),
+  activeNoteIcon: "pin",
+  setActiveNoteIcon: (activeNoteIcon) => set({ activeNoteIcon }),
 
   keys: readStoredKeys(),
   setStoredKey: (keyId, value) => {
@@ -166,6 +186,38 @@ export const useAppStore = create<AppState>((set) => ({
   clearFeatures: () => set({ features: [], selectedFeatureId: null }),
   selectedFeatureId: null,
   setSelectedFeatureId: (selectedFeatureId) => set({ selectedFeatureId }),
+  loadProject: (snapshot) =>
+    set({
+      center: snapshot.view.center,
+      zoom: snapshot.view.zoom,
+      basemapId: snapshot.view.basemapId,
+      aoi: snapshot.aoi,
+      features: snapshot.features,
+      selectedFeatureId: null,
+      commsPlan: snapshot.commsPlan,
+      supportDocIds: snapshot.supportDocIds,
+      includePref: snapshot.includePref,
+      includeCasevacMarker: snapshot.includeCasevacMarker,
+      tool: "select",
+      draftPoints: [],
+    }),
+
+  supportDocIds: ["comms", "pace", "medevac", "checklist"],
+  setSupportDocIds: (supportDocIds) => set({ supportDocIds }),
+  commsPlan: {
+    nets: [],
+    pace: { primary: "", alternate: "", contingency: "", emergency: "" },
+    identity: {},
+    medevac: {},
+    notes: "",
+  },
+  setCommsPlan: (patch) =>
+    set((s) => ({ commsPlan: { ...s.commsPlan, ...patch } })),
+  includePref: false,
+  setIncludePref: (includePref) => set({ includePref }),
+  includeCasevacMarker: false,
+  setIncludeCasevacMarker: (includeCasevacMarker) =>
+    set({ includeCasevacMarker }),
 
   exportOpen: false,
   setExportOpen: (exportOpen) => set({ exportOpen }),

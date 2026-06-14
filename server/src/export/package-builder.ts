@@ -11,13 +11,23 @@ import type {
   JobProgress,
   ManifestEntry,
   MapFeature,
+  NoteIconType,
 } from "../types.js";
 import { writeGeoPackage } from "./gpkg-writer.js";
 import { buildGrgKmz } from "./grg-kmz.js";
 import { buildManifestXml } from "./manifest.js";
-import { buildCotEvents } from "./cot-writer.js";
+import { buildCasevacEvent, buildCotEvents } from "./cot-writer.js";
 import { buildKmlDocument } from "./kml-writer.js";
 import { buildMapSourceXml } from "./mapsource-xml.js";
+import { buildConfigPref, buildSupportCards, hasPrefContent } from "./comms-docs.js";
+import { renderNoteIconPng } from "./note-icons.js";
+import {
+  NOTE_ICONSET_GROUP,
+  buildIconsetXml,
+  noteIconFile,
+} from "./iconset.js";
+import { buildDtedCells } from "./dted.js";
+import { esc } from "./xml.js";
 
 /**
  * Package builder — orchestrates imagery fetch, writers, manifest, and the
@@ -38,6 +48,12 @@ interface ZipFile {
 function safeFileBase(name: string): string {
   const base = name.trim().replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return base.length > 0 ? base : "package";
+}
+
+function safeAttachmentName(name: string): string {
+  const base = path.basename(name).trim().replace(/[^A-Za-z0-9._ -]+/g, "_");
+  const cleaned = base.replace(/^\.*/, "").trim();
+  return cleaned.length > 0 ? cleaned : "attachment";
 }
 
 /** SQL-identifier-safe gpkg table name derived from the package name. */
@@ -61,6 +77,16 @@ function sourceAttributionLine(s: ImagerySourceDef): string {
   return `${s.name} — Attribution: ${s.attribution} — License: ${s.license}`;
 }
 
+function includeInKmlOverlay(feature: MapFeature): boolean {
+  // Every marker is a first-class editable CoT marker in ATAK (SIDC markers by
+  // type, note-icon markers via the bundled iconset). A second KML point at the
+  // same coordinate would duplicate labels/icons, so markers stay CoT-only.
+  // Range & Bearing lines render as a native u-rb-a arrow — skip the KML copy.
+  if (feature.kind === "marker") return false;
+  if (feature.kind === "line" && feature.rangeBearing) return false;
+  return true;
+}
+
 function attributionText(
   packageName: string,
   sources: ImagerySourceDef[],
@@ -75,6 +101,44 @@ function attributionText(
     lines.push(s.name, `Attribution: ${s.attribution}`, `License: ${s.license}`, "");
   }
   return lines.join("\n");
+}
+
+function missionBriefHtml(
+  request: BuildPackageInput["request"],
+  generatedAt: Date,
+): string {
+  const counts = new Map<string, number>();
+  for (const feature of request.features) {
+    counts.set(feature.kind, (counts.get(feature.kind) ?? 0) + 1);
+  }
+  const featureRows = request.features
+    .map(
+      (feature) =>
+        `<tr><td>${esc(feature.kind)}</td><td>${esc(feature.name)}</td><td>${esc(feature.remarks ?? "")}</td></tr>`,
+    )
+    .join("");
+  const countText =
+    counts.size === 0
+      ? "No features"
+      : [...counts.entries()].map(([kind, n]) => `${n} ${kind}`).join(", ");
+  return [
+    "<!doctype html>",
+    '<html><head><meta charset="utf-8">',
+    `<title>${esc(request.packageName)} Mission Brief</title>`,
+    "<style>body{font-family:Arial,sans-serif;margin:24px;line-height:1.4}table{border-collapse:collapse;width:100%}td,th{border:1px solid #999;padding:6px;text-align:left}th{background:#eee}</style>",
+    "</head><body>",
+    `<h1>${esc(request.packageName)} Mission Brief</h1>`,
+    `<p><strong>Generated:</strong> ${esc(generatedAt.toISOString())}</p>`,
+    `<p><strong>AOI:</strong> N ${request.aoi.north.toFixed(6)}, S ${request.aoi.south.toFixed(6)}, E ${request.aoi.east.toFixed(6)}, W ${request.aoi.west.toFixed(6)}</p>`,
+    `<p><strong>Imagery:</strong> ${request.imagery ? `${esc(request.imagery.sourceId)} ${esc(request.imagery.mode)} z${request.imagery.minZoom}-${request.imagery.maxZoom}` : "None"}</p>`,
+    `<p><strong>Features:</strong> ${esc(countText)}</p>`,
+    "<h2>Feature List</h2>",
+    "<table><thead><tr><th>Type</th><th>Name</th><th>Remarks</th></tr></thead><tbody>",
+    featureRows || '<tr><td colspan="3">No features</td></tr>',
+    "</tbody></table>",
+    "</body></html>",
+    "",
+  ].join("\n");
 }
 
 async function writeZip(zipPath: string, files: ZipFile[]): Promise<void> {
@@ -254,6 +318,32 @@ export async function buildPackage(
       }
     }
 
+    // ── Elevation (DTED) ───────────────────────────────────────────────────
+    if (request.includeElevation) {
+      progress({ phase: "fetching elevation", percent: 58 });
+      const level = request.elevationLevel === 2 ? 2 : 1;
+      const dted = await buildDtedCells(request.aoi, level, signal, (d, t) =>
+        onProgress({
+          phase: "fetching elevation",
+          percent: 58 + Math.round((d / Math.max(1, t)) * 5),
+          message: `${d}/${t} DTED cells`,
+        }),
+      );
+      warnings.push(...dted.warnings);
+      if (dted.files.length > 0) {
+        const dtedZip = path.join(outDir, `${jobId}-dted.zip`);
+        tempFiles.push(dtedZip);
+        await writeZip(
+          dtedZip,
+          dted.files.map((f) => ({ entry: f.path, content: f.content })),
+        );
+        const name = "dted.zip";
+        const entry = `${uuid()}/${name}`;
+        zipFiles.push({ entry, content: { file: dtedZip } });
+        manifestEntries.push({ zipEntry: entry, name, contentType: "DTED" });
+      }
+    }
+
     // ── Features: CoT events + KML overlay ─────────────────────────────────
     progress({ phase: "writing features", percent: 65 });
     const featureByUid = new Map<string, MapFeature>(
@@ -287,13 +377,36 @@ export async function buildPackage(
       });
     }
 
+    // Files attached to a specific feature → that marker's attachments in ATAK
+    // (manifest Content carrying the marker uid, sharing the marker's folder).
+    for (const f of request.features) {
+      if (!f.attachments || f.attachments.length === 0) continue;
+      for (const att of f.attachments) {
+        const name = safeAttachmentName(att.name);
+        const entry = `${f.id}/${name}`;
+        const content = Buffer.from(att.base64, "base64");
+        zipFiles.push({ entry, content });
+        manifestEntries.push({
+          zipEntry: entry,
+          name,
+          uid: f.id,
+          ...(att.contentType ? { contentType: att.contentType } : {}),
+        });
+        if (content.length === 0) {
+          warnings.push(`Attachment ${name} on "${f.name}" was empty.`);
+        }
+      }
+    }
+
     const sourcesForAttribution: ImagerySourceDef[] = [...usedSources];
 
     // Every feature also exports as an editable CoT object; the KML overlay is
-    // a styled visual copy (and the only place polygon holes + clean text
-    // labels survive). Honor the opt-out fully — nothing is lost from CoT.
+    // a styled visual copy for line/area geometry. Markers stay CoT-only to
+    // avoid duplicate point symbols (note glyphs ride the iconset below).
     const kmlFeatures =
-      request.includeKmlOverlay !== false ? request.features : [];
+      request.includeKmlOverlay !== false
+        ? request.features.filter(includeInKmlOverlay)
+        : [];
     if (kmlFeatures.length > 0) {
       const kmlDescription =
         usedSources.length > 0
@@ -308,6 +421,36 @@ export async function buildPackage(
         contentType: "KML",
         visible: true,
       });
+    }
+
+    // ── Note-icon iconset ──────────────────────────────────────────────────
+    // Markers with a note glyph reference the bundled iconset by path; ship it
+    // so the glyph renders on the native CoT marker (offline, no remote URLs).
+    const noteIcons = [
+      ...new Set(
+        request.features
+          .filter((f) => f.kind === "marker")
+          .map((f) => f.noteIcon)
+          .filter((i): i is NoteIconType => i !== undefined),
+      ),
+    ].sort();
+    if (noteIcons.length > 0) {
+      const iconsetZip = path.join(outDir, `${jobId}-iconset.zip`);
+      tempFiles.push(iconsetZip);
+      const iconFiles: ZipFile[] = await Promise.all(
+        noteIcons.map(async (icon) => ({
+          entry: `${NOTE_ICONSET_GROUP}/${noteIconFile(icon)}`,
+          content: await renderNoteIconPng(icon),
+        })),
+      );
+      await writeZip(iconsetZip, [
+        { entry: "iconset.xml", content: buildIconsetXml(noteIcons) },
+        ...iconFiles,
+      ]);
+      const name = "iconset.zip";
+      const entry = `${uuid()}/${name}`;
+      zipFiles.push({ entry, content: { file: iconsetZip } });
+      manifestEntries.push({ zipEntry: entry, name, contentType: "iconset" });
     }
 
     // ── Streaming map-source XML ───────────────────────────────────────────
@@ -357,6 +500,86 @@ export async function buildPackage(
       if (!sourcesForAttribution.some((s) => s.id === source.id)) {
         sourcesForAttribution.push(source);
       }
+    }
+
+    // ── Mission brief ──────────────────────────────────────────────────────
+    if (request.includeMissionBrief) {
+      const name = "mission-brief.html";
+      const entry = `${uuid()}/${name}`;
+      zipFiles.push({
+        entry,
+        content: missionBriefHtml(request, nowFn()),
+      });
+      manifestEntries.push({
+        zipEntry: entry,
+        name,
+        contentType: "text/html",
+      });
+    }
+
+    // ── Comms / PACE / MEDEVAC cards + config.pref + CASEVAC ────────────────
+    if (request.supportDocIds && request.supportDocIds.length > 0) {
+      const cards = buildSupportCards(
+        request.supportDocIds,
+        request.commsPlan ?? {},
+        request.packageName,
+        request.aoi,
+      );
+      for (const card of cards) {
+        const name = `${card.fileBase}.html`;
+        const entry = `${uuid()}/${name}`;
+        zipFiles.push({ entry, content: card.html });
+        manifestEntries.push({ zipEntry: entry, name, contentType: "text/html" });
+      }
+    }
+    if (request.includePref && hasPrefContent(request.commsPlan?.identity)) {
+      // ImportPrefSort matches by the .pref extension and applies on import.
+      const pref = buildConfigPref(request.commsPlan!.identity!);
+      const entry = `${uuid()}/config.pref`;
+      zipFiles.push({ entry, content: pref });
+      manifestEntries.push({
+        zipEntry: entry,
+        name: "config.pref",
+        contentType: "ATAK Preferences",
+      });
+    }
+    if (request.includeCasevacMarker && request.commsPlan?.medevac) {
+      const center = {
+        lat: (request.aoi.north + request.aoi.south) / 2,
+        lon: (request.aoi.east + request.aoi.west) / 2,
+      };
+      const cot = buildCasevacEvent(
+        request.commsPlan.medevac,
+        center,
+        input.determinism,
+      );
+      const entry = `${cot.uid}/${cot.uid}.cot`;
+      zipFiles.push({ entry, content: cot.xml });
+      manifestEntries.push({
+        zipEntry: entry,
+        name: "CASEVAC",
+        uid: cot.uid,
+        isCot: true,
+      });
+    }
+
+    // ── User attachments ───────────────────────────────────────────────────
+    if (request.attachments && request.attachments.length > 0) {
+      progress({ phase: "writing attachments", percent: 72 });
+      request.attachments.forEach((attachment, index) => {
+        const name = safeAttachmentName(attachment.name);
+        const entry = `${uuid()}/attachments/${name}`;
+        const content = Buffer.from(attachment.base64, "base64");
+        zipFiles.push({ entry, content });
+        manifestEntries.push({
+          zipEntry: entry,
+          name,
+          ...(attachment.contentType ? { contentType: attachment.contentType } : {}),
+        });
+        if (content.length === 0) {
+          warnings.push(`Attachment ${index + 1} (${name}) was empty.`);
+        }
+      });
     }
 
     // ── Attribution ────────────────────────────────────────────────────────
