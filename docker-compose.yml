@@ -9,21 +9,13 @@ services:
       TAKPACK_DATA_DIR: /data
     volumes:
       - takpack-data:/data
-    # Pick ONE of the two networking styles below.
-    #
-    # A) Caddy reverse-proxies over a shared Docker network (recommended):
-    #    no published port; Caddy reaches it as http://takpack-studio:8745.
-    #    Uncomment and set this to the network Caddy already runs on.
-    # networks:
-    #   - caddy
-    #
-    # B) Caddy proxies to a host port: publish it and proxy to 127.0.0.1:8745.
-    ports:
-      - "127.0.0.1:8745:8745"
+    networks:
+      - edge
 
 volumes:
   takpack-data:
 
-# networks:
-#   caddy:
-#     external: true
+networks:
+  edge:
+    external: true
+    name: edge
