@@ -1,0 +1,17 @@
+node_modules
+**/node_modules
+dist
+**/dist
+data
+**/data
+test-output
+**/test-output
+.git
+.gitignore
+*.log
+.env
+.env.*
+Dockerfile
+.dockerignore
+docker-compose*.yml
+README*.md
