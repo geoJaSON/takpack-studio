@@ -33,6 +33,9 @@ export default function App() {
   const [coordError, setCoordError] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [projectMsg, setProjectMsg] = useState<ProjectMessage | null>(null);
+  const [mobileDrawer, setMobileDrawer] = useState<
+    "imagery" | "features" | null
+  >(null);
   const loadInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -135,6 +138,28 @@ export default function App() {
           <span className="app-title-main">TAKPACK</span>
           <span className="app-title-sub">STUDIO</span>
         </div>
+        <div className="mobile-drawer-toggles mobile-only">
+          <button
+            type="button"
+            className="btn btn-ghost drawer-toggle"
+            data-active={mobileDrawer === "imagery"}
+            onClick={() =>
+              setMobileDrawer((d) => (d === "imagery" ? null : "imagery"))
+            }
+          >
+            IMAGERY
+          </button>
+          <button
+            type="button"
+            className="btn btn-ghost drawer-toggle"
+            data-active={mobileDrawer === "features"}
+            onClick={() =>
+              setMobileDrawer((d) => (d === "features" ? null : "features"))
+            }
+          >
+            FEATURES
+          </button>
+        </div>
         <div className="header-status">
           <span className="status-chip" data-active={aoi !== null}>
             {aoi ? "AOI SET" : "NO AOI"}
@@ -203,10 +228,13 @@ export default function App() {
           />
           <button
             className="btn btn-primary export-btn"
-            onClick={() => setExportOpen(true)}
+            onClick={() => {
+              setMobileDrawer(null);
+              setExportOpen(true);
+            }}
             disabled={aoi === null && features.length === 0}
           >
-            EXPORT PACKAGE
+            EXPORT<span className="label-pkg"> PACKAGE</span>
           </button>
         </div>
       </header>
@@ -223,7 +251,11 @@ export default function App() {
       )}
 
       <div className="app-body">
-        <aside className="sidebar sidebar-left">
+        <aside
+          className={`sidebar sidebar-left${
+            mobileDrawer === "imagery" ? " open" : ""
+          }`}
+        >
           <ImageryPanel />
         </aside>
 
@@ -232,9 +264,21 @@ export default function App() {
           <AnnotationToolbar />
         </main>
 
-        <aside className="sidebar sidebar-right">
+        <aside
+          className={`sidebar sidebar-right${
+            mobileDrawer === "features" ? " open" : ""
+          }`}
+        >
           <FeaturePanel />
         </aside>
+
+        {mobileDrawer && (
+          <div
+            className="mobile-scrim"
+            onClick={() => setMobileDrawer(null)}
+            aria-hidden="true"
+          />
+        )}
       </div>
 
       {exportOpen && <ExportDialog />}

@@ -1481,3 +1481,137 @@ textarea {
 .feature-edit-handle.vertex span {
   background: #ffffff;
 }
+
+/* ════════════════════════════ responsive / mobile ════════════════════════════
+   Desktop keeps the three-column layout. At ≤820px the two sidebars become
+   slide-over drawers toggled from the header, the map fills the screen, and the
+   FEATURES annotation toolbox (normally fixed over the map) flows inline inside
+   its drawer — a transformed drawer ancestor would otherwise break its fixed
+   positioning. */
+
+.mobile-only {
+  display: none;
+}
+
+.mobile-scrim {
+  display: none;
+}
+
+.mobile-drawer-toggles {
+  gap: 6px;
+}
+
+.drawer-toggle {
+  height: 30px;
+  padding: 4px 11px;
+  font-size: 0.7rem;
+}
+
+.drawer-toggle[data-active="true"] {
+  color: var(--amber);
+  border-color: rgba(255, 170, 0, 0.55);
+  background: var(--amber-dim);
+}
+
+@media (max-width: 820px) {
+  .mobile-only {
+    display: flex;
+  }
+
+  /* "EXPORT PACKAGE" → "EXPORT" to keep the header compact. */
+  .label-pkg {
+    display: none;
+  }
+
+  /* Header condenses and is allowed to wrap; the map gets the remaining height. */
+  .app-header {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 52px;
+    gap: 8px;
+    padding: 8px 10px 8px 14px;
+  }
+
+  .app-title-sub {
+    display: none;
+  }
+
+  .header-actions {
+    margin-left: auto;
+    gap: 6px;
+  }
+
+  /* Status chips + coordinate entry drop to their own full-width row. */
+  .header-status {
+    order: 3;
+    flex-basis: 100%;
+    margin-left: 0;
+    flex-wrap: wrap;
+  }
+
+  .coord-entry {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .coord-entry .mgrs-readout {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* Map fills the body; the sidebars slide in over it as drawers. */
+  .app-body {
+    position: relative;
+    grid-template-columns: 1fr;
+    overflow: hidden;
+  }
+
+  .map-area {
+    grid-column: 1;
+  }
+
+  .sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: min(86vw, 360px);
+    z-index: 1400;
+    transition: transform 220ms ease;
+    box-shadow: 0 0 44px rgba(0, 0, 0, 0.65);
+  }
+
+  .sidebar-left {
+    left: 0;
+    transform: translateX(-101%);
+  }
+
+  .sidebar-right {
+    right: 0;
+    transform: translateX(101%);
+  }
+
+  .sidebar.open {
+    transform: none;
+  }
+
+  .mobile-scrim {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 1350;
+    background: rgba(4, 6, 4, 0.55);
+    backdrop-filter: blur(1px);
+  }
+
+  /* Let the annotation toolbox flow inline in the FEATURES drawer instead of
+     floating fixed over the map (which breaks inside a transformed ancestor). */
+  .toolbox-shell {
+    position: static;
+    width: auto;
+    min-width: 0;
+    transform: none;
+    backdrop-filter: none;
+    box-shadow: none;
+    margin-bottom: 12px;
+  }
+}
